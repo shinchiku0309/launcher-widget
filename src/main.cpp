@@ -2044,10 +2044,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
             hwnd, nullptr, g.instance, nullptr);
         
-        TOOLINFOW ti{ sizeof(ti) };
-        ti.uFlags = TTF_IDISHWND | TTF_TRACK | TTF_ABSOLUTE;
+        TOOLINFOW ti{};
+        ti.cbSize = sizeof(ti);
+        ti.uFlags = TTF_TRACK | TTF_ABSOLUTE;
         ti.hwnd = hwnd;
-        ti.uId = (UINT_PTR)hwnd;
+        ti.uId = 1;
         ti.lpszText = const_cast<wchar_t*>(L"");
         SendMessageW(g.tooltipHwnd, TTM_ADDTOOLW, 0, (LPARAM)&ti);
 
@@ -2147,9 +2148,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 ReleaseDC(hwnd, hdc);
             }
 
-            TOOLINFOW ti{ sizeof(ti) };
+            TOOLINFOW ti{};
+            ti.cbSize = sizeof(ti);
             ti.hwnd = hwnd;
-            ti.uId = (UINT_PTR)hwnd;
+            ti.uId = 1;
             
             if (show) {
                 ti.lpszText = const_cast<wchar_t*>(tooltipText.c_str());
@@ -2172,9 +2174,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_MOUSELEAVE: {
         g.lastHoveredButton = -1;
-        TOOLINFOW ti{ sizeof(ti) };
+        TOOLINFOW ti{};
+        ti.cbSize = sizeof(ti);
         ti.hwnd = hwnd;
-        ti.uId = (UINT_PTR)hwnd;
+        ti.uId = 1;
         SendMessageW(g.tooltipHwnd, TTM_TRACKACTIVATE, FALSE, (LPARAM)&ti);
         return 0;
     }
