@@ -46,6 +46,7 @@ struct AppConfig {
     int buttonSize = 96;
     int gap = 10;
     bool alwaysOnTop = true;
+    std::map<int, std::wstring> pageNames;
     std::map<int, std::vector<ButtonConfig>> pages;
 };
 
@@ -106,6 +107,7 @@ static constexpr int IDC_COLS = 3102;
 static constexpr int IDC_BUTTON_SIZE = 3103;
 static constexpr int IDC_GAP = 3104;
 static constexpr int IDC_TOPMOST = 3105;
+static constexpr int IDC_PAGE_NAME = 3106;
 
 static std::wstring Utf8ToWide(const std::string& value) {
     if (value.empty()) return L"";
@@ -163,6 +165,19 @@ static std::vector<ButtonConfig>& CurrentButtons() {
     return buttons;
 }
 
+static std::wstring DefaultPageName(int page) {
+    return L"Page " + std::to_wstring(page + 1);
+}
+
+static std::wstring PageName(int page) {
+    auto it = g.config.pageNames.find(page);
+    if (it != g.config.pageNames.end()) {
+        std::wstring name = Trim(it->second);
+        if (!name.empty()) return name;
+    }
+    return DefaultPageName(page);
+}
+
 static void EnsureDefaults() {
     auto& buttons = g.config.pages[0];
     if (!buttons.empty()) return;
@@ -196,10 +211,15 @@ static void LoadConfig() {
     for (wchar_t* p = sections; *p; p += wcslen(p) + 1) {
         int page = -1;
         int index = -1;
+        wchar_t value[2048]{};
+        if (swscanf_s(p, L"Page:%d", &page) == 1 && page >= 0) {
+            GetPrivateProfileStringW(p, L"Name", L"", value, 2048, g.configPath.c_str());
+            g.config.pageNames[page] = value;
+            continue;
+        }
         if (swscanf_s(p, L"Button:%d:%d", &page, &index) != 2 || page < 0 || index < 0) continue;
         auto& buttons = g.config.pages[page];
         if (static_cast<int>(buttons.size()) <= index) buttons.resize(index + 1);
-        wchar_t value[2048]{};
         GetPrivateProfileStringW(p, L"Title", L"", value, 2048, g.configPath.c_str());
         buttons[index].title = value;
         GetPrivateProfileStringW(p, L"Image", L"", value, 2048, g.configPath.c_str());
@@ -223,6 +243,11 @@ static void SaveConfig() {
     WritePrivateProfileStringW(L"Window", L"Gap", std::to_wstring(g.config.gap).c_str(), g.configPath.c_str());
     WritePrivateProfileStringW(L"Window", L"AlwaysOnTop", g.config.alwaysOnTop ? L"1" : L"0", g.configPath.c_str());
     WritePrivateProfileStringW(L"Window", L"UiVersion", L"2", g.configPath.c_str());
+
+    for (const auto& pageName : g.config.pageNames) {
+        std::wstring section = L"Page:" + std::to_wstring(pageName.first);
+        WritePrivateProfileStringW(section.c_str(), L"Name", pageName.second.c_str(), g.configPath.c_str());
+    }
 
     for (const auto& pagePair : g.config.pages) {
         for (size_t i = 0; i < pagePair.second.size(); ++i) {
@@ -346,7 +371,7 @@ static void Paint(HDC hdc) {
     DeleteObject(border);
 
     RECT headerTitleRect{ 10, 0, client.right - 72, HEADER_HEIGHT };
-    DrawCenteredText(hdc, headerTitleRect, L"Launcher", 9, true);
+    DrawCenteredText(hdc, headerTitleRect, PageName(g.currentPage), 9, true);
 
     RECT settingsRect = HeaderButtonRect(1);
     RECT closeRect = HeaderButtonRect(0);
@@ -1133,6 +1158,7 @@ static void EditButton(int index) {
 
 struct SettingsEditorContext {
     AppConfig original;
+    int pageIndex = 0;
     bool accepted = false;
 };
 
@@ -1143,23 +1169,28 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
         auto* cs = reinterpret_cast<CREATESTRUCTW*>(lp);
         ctx = reinterpret_cast<SettingsEditorContext*>(cs->lpCreateParams);
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(ctx));
-        AddLabel(hwnd, L"Layout", 24, 22, 120, 24);
-        AddLabel(hwnd, L"Rows", 40, 62, 130, 24);
-        AddEdit(hwnd, IDC_ROWS, std::to_wstring(ctx->original.rows), 190, 60, 120, 28);
-        AddLabel(hwnd, L"Columns", 40, 102, 130, 24);
-        AddEdit(hwnd, IDC_COLS, std::to_wstring(ctx->original.cols), 190, 100, 120, 28);
-        AddLabel(hwnd, L"Button size", 40, 142, 130, 24);
-        AddEdit(hwnd, IDC_BUTTON_SIZE, std::to_wstring(ctx->original.buttonSize), 190, 140, 120, 28);
-        AddLabel(hwnd, L"Gap", 40, 182, 130, 24);
-        AddEdit(hwnd, IDC_GAP, std::to_wstring(ctx->original.gap), 190, 180, 120, 28);
-        AddButton(hwnd, IDC_TOPMOST, L"Always on top", 190, 226, 180, 30, BS_AUTOCHECKBOX);
+        AddLabel(hwnd, L"Page", 24, 22, 120, 24);
+        AddLabel(hwnd, L"Name", 40, 62, 130, 24);
+        AddEdit(hwnd, IDC_PAGE_NAME, PageName(ctx->pageIndex), 190, 60, 200, 28);
+
+        AddLabel(hwnd, L"Layout", 24, 112, 120, 24);
+        AddLabel(hwnd, L"Rows", 40, 152, 130, 24);
+        AddEdit(hwnd, IDC_ROWS, std::to_wstring(ctx->original.rows), 190, 150, 120, 28);
+        AddLabel(hwnd, L"Columns", 40, 192, 130, 24);
+        AddEdit(hwnd, IDC_COLS, std::to_wstring(ctx->original.cols), 190, 190, 120, 28);
+        AddLabel(hwnd, L"Button size", 40, 232, 130, 24);
+        AddEdit(hwnd, IDC_BUTTON_SIZE, std::to_wstring(ctx->original.buttonSize), 190, 230, 120, 28);
+        AddLabel(hwnd, L"Gap", 40, 272, 130, 24);
+        AddEdit(hwnd, IDC_GAP, std::to_wstring(ctx->original.gap), 190, 270, 120, 28);
+        AddButton(hwnd, IDC_TOPMOST, L"Always on top", 190, 316, 180, 30, BS_AUTOCHECKBOX);
         SendMessageW(GetDlgItem(hwnd, IDC_TOPMOST), BM_SETCHECK, ctx->original.alwaysOnTop ? BST_CHECKED : BST_UNCHECKED, 0);
-        AddButton(hwnd, IDOK, L"OK", 220, 294, 80, 32, BS_DEFPUSHBUTTON);
-        AddButton(hwnd, IDCANCEL, L"Cancel", 310, 294, 90, 32);
+        AddButton(hwnd, IDOK, L"OK", 220, 384, 80, 32, BS_DEFPUSHBUTTON);
+        AddButton(hwnd, IDCANCEL, L"Cancel", 310, 384, 90, 32);
         return 0;
     }
     case WM_COMMAND:
         if (LOWORD(wp) == IDOK && ctx) {
+            g.config.pageNames[ctx->pageIndex] = GetWindowTextString(GetDlgItem(hwnd, IDC_PAGE_NAME));
             g.config.rows = std::max(1, std::min(10, _wtoi(GetWindowTextString(GetDlgItem(hwnd, IDC_ROWS)).c_str())));
             g.config.cols = std::max(1, std::min(12, _wtoi(GetWindowTextString(GetDlgItem(hwnd, IDC_COLS)).c_str())));
             g.config.buttonSize = std::max(64, std::min(220, _wtoi(GetWindowTextString(GetDlgItem(hwnd, IDC_BUTTON_SIZE)).c_str())));
@@ -1184,6 +1215,7 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
 static void ShowSettingsDialog() {
     SettingsEditorContext ctx{};
     ctx.original = g.config;
+    ctx.pageIndex = g.currentPage;
     static bool registered = false;
     if (!registered) {
         WNDCLASSW wc{};
@@ -1196,7 +1228,7 @@ static void ShowSettingsDialog() {
         registered = true;
     }
     HWND dialog = CreateWindowExW(WS_EX_DLGMODALFRAME, L"LauncherSettingsEditor", L"Settings",
-        WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT, 450, 380,
+        WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT, 450, 470,
         g.hwnd, nullptr, g.instance, &ctx);
     RunOwnedModal(dialog);
     if (ctx.accepted) {
