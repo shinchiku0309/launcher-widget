@@ -781,6 +781,20 @@ static void UpdateButtonEditorFields(HWND hwnd) {
     SetWindowTextW(browse, kind == L"Folder" ? L"Folder" : L"Select");
     SetWindowTextW(import, kind == L"App (.exe)" ? L"Start menu" : L"Favorites");
 
+    if (kind == L"App (.exe)") {
+        MoveWindow(target, 160, 96, 330, 28, TRUE);
+        MoveWindow(browse, 500, 96, 68, 28, TRUE);
+        MoveWindow(import, 578, 96, 92, 28, TRUE);
+    } else if (kind == L"URL") {
+        MoveWindow(target, 160, 96, 360, 28, TRUE);
+        MoveWindow(import, 528, 96, 110, 28, TRUE);
+    } else if (kind == L"File" || kind == L"Folder") {
+        MoveWindow(target, 160, 96, 360, 28, TRUE);
+        MoveWindow(browse, 528, 96, 110, 28, TRUE);
+    } else {
+        MoveWindow(target, 160, 96, 470, 28, TRUE);
+    }
+
     SetVisible(targetLabel, needsTarget);
     SetVisible(target, needsTarget);
     SetVisible(argsLabel, needsArgs);
