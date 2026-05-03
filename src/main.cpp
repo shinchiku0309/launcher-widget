@@ -90,7 +90,9 @@ static constexpr int IDM_ALWAYS_ON_TOP = 1004;
 static constexpr int IDM_EXIT = 1005;
 static constexpr int IDM_PAGE_SETTINGS = 1006;
 static constexpr int IDM_RESTORE = 1007;
+static constexpr int IDM_DELETE_PAGE = 1008;
 static constexpr int IDM_EDIT_BASE = 2000;
+static constexpr int IDM_CLEAR_BASE = 2400;
 static constexpr UINT WM_TRAYICON = WM_APP + 1;
 
 static constexpr int HEADER_HEIGHT = 40;
@@ -386,6 +388,28 @@ static bool DeletePage(int page) {
     DeletePageSectionsFromConfigFile(page);
     g.currentPage = nextPage;
     CurrentButtons();
+    return true;
+}
+
+static bool ConfirmAndDeleteCurrentPage(HWND owner) {
+    if (ExistingPages().size() <= 1) {
+        MessageBoxW(owner, L"The last page cannot be deleted.", L"Delete page", MB_OK | MB_ICONINFORMATION);
+        return false;
+    }
+    std::wstring message = L"Delete \"" + PageName(g.currentPage) + L"\" and all buttons on this page?";
+    if (MessageBoxW(owner, message.c_str(), L"Delete page", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES) {
+        return false;
+    }
+    return DeletePage(g.currentPage);
+}
+
+static bool ConfirmAndClearButton(HWND owner, int index) {
+    auto& buttons = CurrentButtons();
+    if (index < 0 || index >= static_cast<int>(buttons.size())) return false;
+    if (MessageBoxW(owner, L"Clear this button assignment and display settings?", L"Clear button", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES) {
+        return false;
+    }
+    buttons[index] = ButtonConfig{};
     return true;
 }
 
@@ -706,6 +730,12 @@ static void Paint(HDC hdc) {
         }
         if (!drew && b.action.type == ActionType::Keys) {
             drew = DrawSystemKeyIcon(hdc, b.action, r);
+        }
+        if (!drew && b.action.type == ActionType::Settings) {
+            RECT settingsIconRect = r;
+            settingsIconRect.bottom -= 20;
+            DrawSettingsIcon(hdc, settingsIconRect);
+            drew = true;
         }
         if (!drew && !b.text.empty()) DrawCenteredText(hdc, iconRect, b.text, 24, false);
 
@@ -1688,13 +1718,7 @@ static LRESULT CALLBACK PageSettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
             return 0;
         }
         if (LOWORD(wp) == IDC_DELETE_PAGE && ctx) {
-            if (ExistingPages().size() <= 1) {
-                MessageBoxW(hwnd, L"The last page cannot be deleted.", L"Delete page", MB_OK | MB_ICONINFORMATION);
-                return 0;
-            }
-            std::wstring message = L"Delete \"" + PageName(ctx->pageIndex) + L"\" and all buttons on this page?";
-            if (MessageBoxW(hwnd, message.c_str(), L"Delete page", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) == IDYES) {
-                ctx->deleted = true;
+            if (ctx->pageIndex == g.currentPage && ConfirmAndDeleteCurrentPage(hwnd)) {
                 ctx->accepted = true;
                 DestroyWindow(hwnd);
             }
@@ -1737,20 +1761,26 @@ static void ShowPageSettingsDialog() {
         g.hwnd, nullptr, g.instance, &ctx);
     RunOwnedModal(dialog);
     if (ctx.accepted) {
-        if (ctx.deleted) {
-            DeletePage(ctx.pageIndex);
-        }
         SaveConfig();
         InvalidateRect(g.hwnd, nullptr, TRUE);
     }
 }
 
-static void ShowContextMenu(POINT pt, int buttonIndex) {
+static void ShowContextMenu(POINT pt, int buttonIndex, bool pageTitle) {
     HMENU menu = CreatePopupMenu();
-    if (buttonIndex >= 0) AppendMenuW(menu, MF_STRING, IDM_EDIT_BASE + buttonIndex, L"Edit button");
+    if (buttonIndex >= 0) {
+        AppendMenuW(menu, MF_STRING, IDM_EDIT_BASE + buttonIndex, L"Edit button");
+        AppendMenuW(menu, MF_STRING, IDM_CLEAR_BASE + buttonIndex, L"Clear button");
+        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    }
+    if (pageTitle) {
+        AppendMenuW(menu, MF_STRING, IDM_PAGE_SETTINGS, L"Page settings");
+        AppendMenuW(menu, MF_STRING, IDM_DELETE_PAGE, L"Delete page");
+        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    }
     AppendMenuW(menu, MF_STRING, IDM_PAGE_PREV, L"Page -");
     AppendMenuW(menu, MF_STRING, IDM_PAGE_NEXT, L"Page +");
-    AppendMenuW(menu, MF_STRING, IDM_PAGE_SETTINGS, L"Page settings");
+    if (!pageTitle) AppendMenuW(menu, MF_STRING, IDM_PAGE_SETTINGS, L"Page settings");
     AppendMenuW(menu, MF_STRING, IDM_SETTINGS, L"Settings");
     AppendMenuW(menu, MF_STRING | (g.config.alwaysOnTop ? MF_CHECKED : MF_UNCHECKED), IDM_ALWAYS_ON_TOP, L"Always on top");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
@@ -1812,15 +1842,17 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             SendMessageW(hwnd, WM_NCLBUTTONDOWN, HTCAPTION, 0);
         } else {
             ClientToScreen(hwnd, &pt);
-            ShowContextMenu(pt, -1);
+            ShowContextMenu(pt, -1, false);
         }
         return 0;
     }
     case WM_RBUTTONUP: {
         POINT pt{ GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
         int index = HitButton(pt);
+        RECT titleRect = HeaderTitleRect();
+        bool pageTitle = index < 0 && PtInRect(&titleRect, pt);
         ClientToScreen(hwnd, &pt);
-        ShowContextMenu(pt, index);
+        ShowContextMenu(pt, index, pageTitle);
         return 0;
     }
     case WM_SIZE:
@@ -1842,10 +1874,22 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_COMMAND: {
         int id = LOWORD(wp);
         if (id >= IDM_EDIT_BASE && id < IDM_EDIT_BASE + 256) EditButton(id - IDM_EDIT_BASE);
+        else if (id >= IDM_CLEAR_BASE && id < IDM_CLEAR_BASE + 256) {
+            if (ConfirmAndClearButton(hwnd, id - IDM_CLEAR_BASE)) {
+                SaveConfig();
+                InvalidateRect(hwnd, nullptr, TRUE);
+            }
+        }
         else if (id == IDM_RESTORE) RestoreMainWindow();
         else if (id == IDM_PAGE_PREV) MovePage(false);
         else if (id == IDM_PAGE_NEXT) MovePage(true);
         else if (id == IDM_PAGE_SETTINGS) ShowPageSettingsDialog();
+        else if (id == IDM_DELETE_PAGE) {
+            if (ConfirmAndDeleteCurrentPage(hwnd)) {
+                SaveConfig();
+                InvalidateRect(hwnd, nullptr, TRUE);
+            }
+        }
         else if (id == IDM_SETTINGS) ShowSettingsDialog();
         else if (id == IDM_ALWAYS_ON_TOP) {
             g.config.alwaysOnTop = !g.config.alwaysOnTop;
