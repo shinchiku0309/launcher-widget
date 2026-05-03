@@ -133,6 +133,7 @@ static constexpr int IDC_PAGE_NAME = 3106;
 static constexpr int IDC_TRAY_ICON = 3107;
 static constexpr int IDC_DELETE_PAGE = 3108;
 static constexpr int IDC_CLEAR_BUTTON = 3109;
+static constexpr int IDC_RUN_ON_STARTUP = 3110;
 
 static std::wstring Utf8ToWide(const std::string& value) {
     if (value.empty()) return L"";
@@ -1793,6 +1794,39 @@ struct SettingsEditorContext {
     bool accepted = false;
 };
 
+static constexpr wchar_t REG_RUN_KEY[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+static constexpr wchar_t REG_APP_NAME[] = L"AntigravityLauncher";
+
+static bool IsRunOnStartupEnabled() {
+    HKEY hKey;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, REG_RUN_KEY, 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+        wchar_t path[MAX_PATH];
+        DWORD pathSize = sizeof(path);
+        DWORD type;
+        if (RegQueryValueExW(hKey, REG_APP_NAME, 0, &type, reinterpret_cast<LPBYTE>(path), &pathSize) == ERROR_SUCCESS) {
+            RegCloseKey(hKey);
+            return true;
+        }
+        RegCloseKey(hKey);
+    }
+    return false;
+}
+
+static void SetRunOnStartup(bool enable) {
+    HKEY hKey;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, REG_RUN_KEY, 0, KEY_WRITE, &hKey) == ERROR_SUCCESS) {
+        if (enable) {
+            wchar_t path[MAX_PATH];
+            GetModuleFileNameW(nullptr, path, MAX_PATH);
+            std::wstring command = std::wstring(L"\"") + path + L"\"";
+            RegSetValueExW(hKey, REG_APP_NAME, 0, REG_SZ, reinterpret_cast<const BYTE*>(command.c_str()), static_cast<DWORD>((command.length() + 1) * sizeof(wchar_t)));
+        } else {
+            RegDeleteValueW(hKey, REG_APP_NAME);
+        }
+        RegCloseKey(hKey);
+    }
+}
+
 static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     SettingsEditorContext* ctx = reinterpret_cast<SettingsEditorContext*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
     switch (msg) {
@@ -1813,6 +1847,8 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
         SendMessageW(GetDlgItem(hwnd, IDC_TOPMOST), BM_SETCHECK, ctx->original.alwaysOnTop ? BST_CHECKED : BST_UNCHECKED, 0);
         AddButton(hwnd, IDC_TRAY_ICON, L"Show tray icon", 230, 322, 260, 36, BS_AUTOCHECKBOX);
         SendMessageW(GetDlgItem(hwnd, IDC_TRAY_ICON), BM_SETCHECK, ctx->original.showTrayIcon ? BST_CHECKED : BST_UNCHECKED, 0);
+        AddButton(hwnd, IDC_RUN_ON_STARTUP, L"Run on Windows startup", 230, 366, 260, 36, BS_AUTOCHECKBOX);
+        SendMessageW(GetDlgItem(hwnd, IDC_RUN_ON_STARTUP), BM_SETCHECK, IsRunOnStartupEnabled() ? BST_CHECKED : BST_UNCHECKED, 0);
         AddButton(hwnd, IDOK, L"OK", 344, 420, 96, 38, BS_DEFPUSHBUTTON);
         AddButton(hwnd, IDCANCEL, L"Cancel", 456, 420, 104, 38);
         return 0;
@@ -1825,6 +1861,7 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
             g.config.gap = std::max(4, std::min(32, _wtoi(GetWindowTextString(GetDlgItem(hwnd, IDC_GAP)).c_str())));
             g.config.alwaysOnTop = SendMessageW(GetDlgItem(hwnd, IDC_TOPMOST), BM_GETCHECK, 0, 0) == BST_CHECKED;
             g.config.showTrayIcon = SendMessageW(GetDlgItem(hwnd, IDC_TRAY_ICON), BM_GETCHECK, 0, 0) == BST_CHECKED;
+            SetRunOnStartup(SendMessageW(GetDlgItem(hwnd, IDC_RUN_ON_STARTUP), BM_GETCHECK, 0, 0) == BST_CHECKED);
             ctx->accepted = true;
             DestroyWindow(hwnd);
             return 0;
