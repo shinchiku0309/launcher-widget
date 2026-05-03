@@ -321,6 +321,33 @@ static RECT HeaderTitleRect() {
     return RECT{ prevRect.right + HEADER_BUTTON_GAP, 0, nextRect.left - HEADER_BUTTON_GAP, HEADER_HEIGHT };
 }
 
+static std::vector<int> ExistingPages() {
+    std::vector<int> pages;
+    for (const auto& pagePair : g.config.pages) {
+        if (pagePair.first >= 0) pages.push_back(pagePair.first);
+    }
+    if (pages.empty()) pages.push_back(0);
+    std::sort(pages.begin(), pages.end());
+    pages.erase(std::unique(pages.begin(), pages.end()), pages.end());
+    return pages;
+}
+
+static void MovePage(bool next) {
+    std::vector<int> pages = ExistingPages();
+    if (pages.empty()) return;
+    auto it = std::find(pages.begin(), pages.end(), g.currentPage);
+    if (it == pages.end()) {
+        g.currentPage = pages.front();
+    } else if (next) {
+        ++it;
+        g.currentPage = it == pages.end() ? pages.front() : *it;
+    } else {
+        g.currentPage = it == pages.begin() ? pages.back() : *(it - 1);
+    }
+    CurrentButtons();
+    InvalidateRect(g.hwnd, nullptr, TRUE);
+}
+
 static int HitButton(POINT pt) {
     const int count = g.config.rows * g.config.cols;
     for (int i = 0; i < count; ++i) {
@@ -395,6 +422,29 @@ static bool DrawShellIcon(HDC hdc, const std::wstring& target, RECT rc) {
     return true;
 }
 
+static void DrawHeaderControl(HDC hdc, RECT rc, bool pageControl) {
+    HBRUSH brush = CreateSolidBrush(pageControl ? RGB(44, 60, 78) : RGB(37, 43, 52));
+    HPEN pen = CreatePen(PS_SOLID, pageControl ? 2 : 1, pageControl ? RGB(125, 190, 255) : RGB(104, 116, 136));
+    HGDIOBJ oldBrush = SelectObject(hdc, brush);
+    HGDIOBJ oldPen = SelectObject(hdc, pen);
+    RoundRect(hdc, rc.left, rc.top, rc.right, rc.bottom, pageControl ? 14 : 6, pageControl ? 14 : 6);
+    SelectObject(hdc, oldBrush);
+    SelectObject(hdc, oldPen);
+    DeleteObject(brush);
+    DeleteObject(pen);
+
+    if (pageControl) {
+        HPEN innerPen = CreatePen(PS_SOLID, 1, RGB(33, 40, 49));
+        HGDIOBJ oldInner = SelectObject(hdc, innerPen);
+        HGDIOBJ oldInnerBrush = SelectObject(hdc, GetStockObject(NULL_BRUSH));
+        RECT inner{ rc.left + 3, rc.top + 3, rc.right - 3, rc.bottom - 3 };
+        RoundRect(hdc, inner.left, inner.top, inner.right, inner.bottom, 10, 10);
+        SelectObject(hdc, oldInnerBrush);
+        SelectObject(hdc, oldInner);
+        DeleteObject(innerPen);
+    }
+}
+
 static void Paint(HDC hdc) {
     RECT client{};
     GetClientRect(g.hwnd, &client);
@@ -416,21 +466,13 @@ static void Paint(HDC hdc) {
     RECT closeRect = HeaderButtonRect(0);
     DrawCenteredText(hdc, pageTitleRect, PageName(g.currentPage), 9, true);
 
-    HBRUSH controlBrush = CreateSolidBrush(RGB(37, 43, 52));
-    HPEN controlPen = CreatePen(PS_SOLID, 1, RGB(104, 116, 136));
-    HGDIOBJ oldControlBrush = SelectObject(hdc, controlBrush);
-    HGDIOBJ oldControlPen = SelectObject(hdc, controlPen);
-    RoundRect(hdc, prevRect.left, prevRect.top, prevRect.right, prevRect.bottom, 6, 6);
-    RoundRect(hdc, nextRect.left, nextRect.top, nextRect.right, nextRect.bottom, 6, 6);
-    RoundRect(hdc, settingsRect.left, settingsRect.top, settingsRect.right, settingsRect.bottom, 6, 6);
-    RoundRect(hdc, minimizeRect.left, minimizeRect.top, minimizeRect.right, minimizeRect.bottom, 6, 6);
-    RoundRect(hdc, closeRect.left, closeRect.top, closeRect.right, closeRect.bottom, 6, 6);
-    SelectObject(hdc, oldControlBrush);
-    SelectObject(hdc, oldControlPen);
-    DeleteObject(controlBrush);
-    DeleteObject(controlPen);
-    DrawCenteredText(hdc, prevRect, L"<", 10, true);
-    DrawCenteredText(hdc, nextRect, L">", 10, true);
+    DrawHeaderControl(hdc, prevRect, true);
+    DrawHeaderControl(hdc, nextRect, true);
+    DrawHeaderControl(hdc, settingsRect, false);
+    DrawHeaderControl(hdc, minimizeRect, false);
+    DrawHeaderControl(hdc, closeRect, false);
+    DrawCenteredText(hdc, prevRect, L"<", 12, true);
+    DrawCenteredText(hdc, nextRect, L">", 12, true);
     DrawCenteredText(hdc, settingsRect, L"SET", 7, true);
     DrawCenteredText(hdc, minimizeRect, L"_", 11, true);
     DrawCenteredText(hdc, closeRect, L"X", 10, true);
@@ -1504,14 +1546,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         RECT minimizeRect = HeaderButtonRect(1);
         RECT closeRect = HeaderButtonRect(0);
         if (PtInRect(&prevRect, pt)) {
-            if (g.currentPage > 0) --g.currentPage;
-            InvalidateRect(hwnd, nullptr, TRUE);
+            MovePage(false);
             return 0;
         }
         if (PtInRect(&nextRect, pt)) {
-            ++g.currentPage;
-            CurrentButtons();
-            InvalidateRect(hwnd, nullptr, TRUE);
+            MovePage(true);
             return 0;
         }
         if (PtInRect(&settingsRect, pt)) {
@@ -1566,8 +1605,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         int id = LOWORD(wp);
         if (id >= IDM_EDIT_BASE && id < IDM_EDIT_BASE + 256) EditButton(id - IDM_EDIT_BASE);
         else if (id == IDM_RESTORE) RestoreMainWindow();
-        else if (id == IDM_PAGE_PREV && g.currentPage > 0) { --g.currentPage; InvalidateRect(hwnd, nullptr, TRUE); }
-        else if (id == IDM_PAGE_NEXT) { ++g.currentPage; CurrentButtons(); InvalidateRect(hwnd, nullptr, TRUE); }
+        else if (id == IDM_PAGE_PREV) MovePage(false);
+        else if (id == IDM_PAGE_NEXT) MovePage(true);
         else if (id == IDM_PAGE_SETTINGS) ShowPageSettingsDialog();
         else if (id == IDM_SETTINGS) ShowSettingsDialog();
         else if (id == IDM_ALWAYS_ON_TOP) {
