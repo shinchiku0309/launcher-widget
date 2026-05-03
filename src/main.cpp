@@ -88,6 +88,7 @@ static constexpr int IDM_EDIT_BASE = 2000;
 static constexpr int HEADER_HEIGHT = 40;
 static constexpr int HEADER_BUTTON_SIZE = 30;
 static constexpr int HEADER_BUTTON_GAP = 8;
+static constexpr BYTE WINDOW_OPACITY = 232;
 
 static constexpr int IDC_TITLE = 3001;
 static constexpr int IDC_TEXT = 3002;
@@ -268,12 +269,12 @@ static int HitButton(POINT pt) {
 
 static void ResizeWindowToGrid() {
     if (!g.hwnd) return;
-    RECT rc{ 0, 0,
-        g.config.gap + g.config.cols * (g.config.buttonSize + g.config.gap),
-        HEADER_HEIGHT + g.config.gap + g.config.rows * (g.config.buttonSize + g.config.gap) };
-    AdjustWindowRectEx(&rc, WS_POPUP | WS_THICKFRAME, FALSE, WS_EX_TOOLWINDOW);
+    const int width = g.config.gap + g.config.cols * (g.config.buttonSize + g.config.gap);
+    const int height = HEADER_HEIGHT + g.config.gap + g.config.rows * (g.config.buttonSize + g.config.gap);
     SetWindowPos(g.hwnd, g.config.alwaysOnTop ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0,
-        rc.right - rc.left, rc.bottom - rc.top, SWP_NOMOVE | SWP_NOACTIVATE);
+        width, height, SWP_NOMOVE | SWP_NOACTIVATE);
+    SetWindowRgn(g.hwnd, CreateRoundRectRgn(0, 0, width + 1, height + 1, 18, 18), TRUE);
+    SetLayeredWindowAttributes(g.hwnd, 0, WINDOW_OPACITY, LWA_ALPHA);
 }
 
 static void DrawCenteredText(HDC hdc, RECT rc, const std::wstring& text, int points, bool bold) {
@@ -334,22 +335,23 @@ static bool DrawShellIcon(HDC hdc, const std::wstring& target, RECT rc) {
 static void Paint(HDC hdc) {
     RECT client{};
     GetClientRect(g.hwnd, &client);
-    HBRUSH bg = CreateSolidBrush(RGB(18, 20, 24));
-    FillRect(hdc, &client, bg);
+    HBRUSH bg = CreateSolidBrush(RGB(22, 25, 30));
+    HPEN border = CreatePen(PS_SOLID, 1, RGB(82, 91, 108));
+    HGDIOBJ oldBg = SelectObject(hdc, bg);
+    HGDIOBJ oldBorder = SelectObject(hdc, border);
+    RoundRect(hdc, client.left, client.top, client.right, client.bottom, 18, 18);
+    SelectObject(hdc, oldBg);
+    SelectObject(hdc, oldBorder);
     DeleteObject(bg);
-
-    RECT header{ 0, 0, client.right, HEADER_HEIGHT };
-    HBRUSH headerBrush = CreateSolidBrush(RGB(30, 34, 40));
-    FillRect(hdc, &header, headerBrush);
-    DeleteObject(headerBrush);
+    DeleteObject(border);
 
     RECT headerTitleRect{ 10, 0, client.right - 72, HEADER_HEIGHT };
     DrawCenteredText(hdc, headerTitleRect, L"Launcher", 9, true);
 
     RECT settingsRect = HeaderButtonRect(1);
     RECT closeRect = HeaderButtonRect(0);
-    HBRUSH controlBrush = CreateSolidBrush(RGB(48, 54, 64));
-    HPEN controlPen = CreatePen(PS_SOLID, 1, RGB(88, 96, 110));
+    HBRUSH controlBrush = CreateSolidBrush(RGB(37, 43, 52));
+    HPEN controlPen = CreatePen(PS_SOLID, 1, RGB(104, 116, 136));
     HGDIOBJ oldControlBrush = SelectObject(hdc, controlBrush);
     HGDIOBJ oldControlPen = SelectObject(hdc, controlPen);
     RoundRect(hdc, settingsRect.left, settingsRect.top, settingsRect.right, settingsRect.bottom, 6, 6);
@@ -365,8 +367,8 @@ static void Paint(HDC hdc) {
     const int count = g.config.rows * g.config.cols;
     for (int i = 0; i < count; ++i) {
         RECT r = ButtonRect(i);
-        HBRUSH brush = CreateSolidBrush(RGB(42, 46, 54));
-        HPEN pen = CreatePen(PS_SOLID, 1, RGB(74, 80, 92));
+        HBRUSH brush = CreateSolidBrush(RGB(38, 43, 52));
+        HPEN pen = CreatePen(PS_SOLID, 1, RGB(92, 101, 118));
         HGDIOBJ oldBrush = SelectObject(hdc, brush);
         HGDIOBJ oldPen = SelectObject(hdc, pen);
         RoundRect(hdc, r.left, r.top, r.right, r.bottom, 10, 10);
@@ -1305,10 +1307,10 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int show) {
     RegisterClassW(&wc);
 
     g.hwnd = CreateWindowExW(
-        WS_EX_TOOLWINDOW | (g.config.alwaysOnTop ? WS_EX_TOPMOST : 0),
+        WS_EX_TOOLWINDOW | WS_EX_LAYERED | (g.config.alwaysOnTop ? WS_EX_TOPMOST : 0),
         wc.lpszClassName,
         L"Launcher Widget",
-        WS_POPUP | WS_THICKFRAME,
+        WS_POPUP,
         CW_USEDEFAULT, CW_USEDEFAULT, 420, 280,
         nullptr, nullptr, instance, nullptr);
 
