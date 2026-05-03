@@ -36,6 +36,19 @@ Visual Studio 2022 で `Launcher.sln` を開き、`x64` / `Release` でビルド
 - `Page +` / `Page -`: ページを切り替えます。
 - 右クリックメニューの `Settings`: グリッドやウィンドウ設定を編集します。
 
+## ボタン設定
+
+ボタン編集では、最初にアクション種別を選び、その種別に合った入力欄を設定します。
+
+- `App (.exe)`: `Select` から `.exe` ファイルを選択できます。
+- `URL`: URL を直接入力できます。`Favorites` から Windows Favorites、Microsoft Edge、Google Chrome のブックマーク候補を取り込めます。
+- `File`: `Select` から任意のファイルを選択できます。
+- `Folder`: `Select` からフォルダーを選択できます。
+- `Windows Settings`: `ms-settings:` などの Windows 設定 URI を入力します。
+- `Command`: コマンドと引数を分けて入力します。
+- `Keys`: `CTRL+ALT+T` のようなキー同時押しを入力します。
+- `None`: 何もしないボタンにします。
+
 設定ファイルは次の場所に保存されます。
 
 ```text
