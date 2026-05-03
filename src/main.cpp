@@ -514,8 +514,25 @@ static bool DrawShellIcon(HDC hdc, const std::wstring& target, RECT rc) {
     if (target.empty()) return false;
     SHFILEINFOW info{};
     DWORD flags = SHGFI_ICON | SHGFI_LARGEICON;
-    if (!PathFileExistsW(target.c_str())) flags |= SHGFI_USEFILEATTRIBUTES;
-    if (!SHGetFileInfoW(target.c_str(), FILE_ATTRIBUTE_NORMAL, &info, sizeof(info), flags)) return false;
+    bool success = false;
+    
+    if (target.rfind(L"shell:", 0) == 0) {
+        PIDLIST_ABSOLUTE pidl = nullptr;
+        if (SUCCEEDED(SHParseDisplayName(target.c_str(), nullptr, &pidl, 0, nullptr))) {
+            if (SHGetFileInfoW(reinterpret_cast<LPCWSTR>(pidl), 0, &info, sizeof(info), flags | SHGFI_PIDL)) {
+                success = true;
+            }
+            CoTaskMemFree(pidl);
+        }
+    } else {
+        if (!PathFileExistsW(target.c_str())) flags |= SHGFI_USEFILEATTRIBUTES;
+        if (SHGetFileInfoW(target.c_str(), FILE_ATTRIBUTE_NORMAL, &info, sizeof(info), flags)) {
+            success = true;
+        }
+    }
+    
+    if (!success) return false;
+    
     int side = std::min(rc.right - rc.left, rc.bottom - rc.top) - 32;
     if (side < 24) side = 24;
     DrawIconEx(hdc, rc.left + ((rc.right - rc.left) - side) / 2, rc.top + 12, info.hIcon, side, side, 0, nullptr, DI_NORMAL);
@@ -1182,10 +1199,56 @@ static void CollectKnownFolderApps(REFKNOWNFOLDERID folderId, std::vector<AppCan
     }
 }
 
+static void CollectUWPApps(std::vector<AppCandidate>& apps) {
+    IShellFolder* desktop = nullptr;
+    if (FAILED(SHGetDesktopFolder(&desktop))) return;
+
+    PIDLIST_ABSOLUTE appsPidl = nullptr;
+    if (SUCCEEDED(desktop->ParseDisplayName(NULL, NULL, const_cast<LPWSTR>(L"shell:AppsFolder"), NULL, &appsPidl, NULL))) {
+        IShellFolder* appsFolder = nullptr;
+        if (SUCCEEDED(desktop->BindToObject(appsPidl, NULL, IID_PPV_ARGS(&appsFolder)))) {
+            IEnumIDList* enumIdList = nullptr;
+            if (SUCCEEDED(appsFolder->EnumObjects(NULL, SHCONTF_NONFOLDERS, &enumIdList))) {
+                PITEMID_CHILD childPidl = nullptr;
+                while (enumIdList->Next(1, &childPidl, NULL) == S_OK) {
+                    STRRET strName;
+                    std::wstring title;
+                    if (SUCCEEDED(appsFolder->GetDisplayNameOf(childPidl, SHGDN_NORMAL, &strName))) {
+                        wchar_t* nameStr = nullptr;
+                        StrRetToStrW(&strName, childPidl, &nameStr);
+                        if (nameStr) {
+                            title = nameStr;
+                            CoTaskMemFree(nameStr);
+                        }
+                    }
+                    std::wstring target;
+                    if (SUCCEEDED(appsFolder->GetDisplayNameOf(childPidl, SHGDN_FORPARSING, &strName))) {
+                        wchar_t* parseStr = nullptr;
+                        StrRetToStrW(&strName, childPidl, &parseStr);
+                        if (parseStr) {
+                            target = L"shell:AppsFolder\\" + std::wstring(parseStr);
+                            CoTaskMemFree(parseStr);
+                        }
+                    }
+                    if (!title.empty() && !target.empty()) {
+                        apps.push_back({ title, target, L"", L"" });
+                    }
+                    CoTaskMemFree(childPidl);
+                }
+                enumIdList->Release();
+            }
+            appsFolder->Release();
+        }
+        CoTaskMemFree(appsPidl);
+    }
+    desktop->Release();
+}
+
 static std::vector<AppCandidate> LoadStartMenuApps() {
     std::vector<AppCandidate> apps;
     CollectKnownFolderApps(FOLDERID_StartMenu, apps);
     CollectKnownFolderApps(FOLDERID_CommonStartMenu, apps);
+    CollectUWPApps(apps);
     std::sort(apps.begin(), apps.end(), [](const AppCandidate& a, const AppCandidate& b) {
         return _wcsicmp(a.title.c_str(), b.title.c_str()) < 0;
     });
@@ -1199,6 +1262,13 @@ static std::vector<AppCandidate> LoadStartMenuApps() {
                 if (apps[k].target.find(L"Brave") != std::wstring::npos) apps[k].title += L" (Brave)";
                 else if (apps[k].target.find(L"Edge") != std::wstring::npos) apps[k].title += L" (Edge)";
                 else if (apps[k].target.find(L"Chrome") != std::wstring::npos) apps[k].title += L" (Chrome)";
+                else if (apps[k].target.find(L"shell:AppsFolder") == 0) {
+                    if (apps[k].target.find(L"!App") != std::wstring::npos) {
+                        apps[k].title += L" (Edge App)";
+                    } else {
+                        apps[k].title += L" (UWP)";
+                    }
+                }
             }
         }
         i = j;
