@@ -407,6 +407,10 @@ static WORD VkFromToken(std::wstring token) {
     if (token == L"VOLUMEDOWN" || token == L"VOLUME_DOWN") return VK_VOLUME_DOWN;
     if (token == L"MUTE" || token == L"VOLUMEMUTE" || token == L"VOLUME_MUTE") return VK_VOLUME_MUTE;
     if (token == L"SCREENSHOT" || token == L"PRINTSCREEN" || token == L"PRTSC") return VK_SNAPSHOT;
+    if (token == L"PLAYPAUSE" || token == L"PLAY_PAUSE" || token == L"MEDIA_PLAY_PAUSE") return VK_MEDIA_PLAY_PAUSE;
+    if (token == L"NEXTTRACK" || token == L"NEXT_TRACK" || token == L"MEDIA_NEXT_TRACK") return VK_MEDIA_NEXT_TRACK;
+    if (token == L"PREVTRACK" || token == L"PREVIOUS_TRACK" || token == L"MEDIA_PREV_TRACK") return VK_MEDIA_PREV_TRACK;
+    if (token == L"MEDIASTOP" || token == L"MEDIA_STOP") return VK_MEDIA_STOP;
     if (token.size() == 1) return VkKeyScanW(token[0]) & 0xff;
     if (token.size() > 1 && token[0] == L'F') {
         int n = _wtoi(token.c_str() + 1);
@@ -746,7 +750,8 @@ static std::wstring ComboText(HWND combo) {
 }
 
 static bool IsSystemKeyKind(const std::wstring& kind) {
-    return kind == L"Volume Up" || kind == L"Volume Down" || kind == L"Mute" || kind == L"Screenshot";
+    return kind == L"Volume Up" || kind == L"Volume Down" || kind == L"Mute" || kind == L"Screenshot" ||
+        kind == L"Play/Pause" || kind == L"Next Track" || kind == L"Previous Track" || kind == L"Stop Media";
 }
 
 static std::wstring SystemKeyTarget(const std::wstring& kind) {
@@ -754,6 +759,10 @@ static std::wstring SystemKeyTarget(const std::wstring& kind) {
     if (kind == L"Volume Down") return L"VOLUME_DOWN";
     if (kind == L"Mute") return L"VOLUME_MUTE";
     if (kind == L"Screenshot") return L"PRINTSCREEN";
+    if (kind == L"Play/Pause") return L"MEDIA_PLAY_PAUSE";
+    if (kind == L"Next Track") return L"MEDIA_NEXT_TRACK";
+    if (kind == L"Previous Track") return L"MEDIA_PREV_TRACK";
+    if (kind == L"Stop Media") return L"MEDIA_STOP";
     return L"";
 }
 
@@ -767,6 +776,10 @@ static std::wstring ActionKindForButton(const ButtonConfig& button) {
         if (action.target == L"VOLUME_DOWN") return L"Volume Down";
         if (action.target == L"VOLUME_MUTE") return L"Mute";
         if (action.target == L"PRINTSCREEN") return L"Screenshot";
+        if (action.target == L"MEDIA_PLAY_PAUSE") return L"Play/Pause";
+        if (action.target == L"MEDIA_NEXT_TRACK") return L"Next Track";
+        if (action.target == L"MEDIA_PREV_TRACK") return L"Previous Track";
+        if (action.target == L"MEDIA_STOP") return L"Stop Media";
         return L"Keys";
     }
     if (action.target.rfind(L"http://", 0) == 0 || action.target.rfind(L"https://", 0) == 0) return L"URL";
@@ -950,7 +963,11 @@ static void FillDisplayDefaults(HWND hwnd, const std::wstring& kind) {
         if (GetWindowTextLengthW(textCtrl) == 0) {
             std::wstring badge = kind == L"Volume Up" ? L"VOL+" :
                 kind == L"Volume Down" ? L"VOL-" :
-                kind == L"Mute" ? L"MUTE" : L"SS";
+                kind == L"Mute" ? L"MUTE" :
+                kind == L"Screenshot" ? L"SS" :
+                kind == L"Play/Pause" ? L"PLAY" :
+                kind == L"Next Track" ? L"NEXT" :
+                kind == L"Previous Track" ? L"PREV" : L"STOP";
             SetWindowTextW(textCtrl, badge.c_str());
         }
     } else if (kind == L"URL") {
@@ -985,7 +1002,7 @@ static LRESULT CALLBACK ButtonEditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
         AddLabel(hwnd, L"Action", 24, 22, 120, 24);
         AddLabel(hwnd, L"Type", 40, 58, 100, 24);
         HWND combo = AddCombo(hwnd, IDC_ACTION, 160, 56, 638, 320);
-        for (const wchar_t* item : { L"URL", L"File", L"App (.exe)", L"Folder", L"Windows Settings", L"Volume Up", L"Volume Down", L"Mute", L"Screenshot", L"Command", L"Keys", L"None" }) {
+        for (const wchar_t* item : { L"URL", L"File", L"App (.exe)", L"Folder", L"Windows Settings", L"Volume Up", L"Volume Down", L"Mute", L"Play/Pause", L"Next Track", L"Previous Track", L"Stop Media", L"Screenshot", L"Command", L"Keys", L"None" }) {
             SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(item));
         }
         std::wstring kind = ActionKindForButton(ctx->original);

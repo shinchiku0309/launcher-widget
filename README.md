@@ -46,6 +46,7 @@ Visual Studio 2022 で `Launcher.sln` を開き、`x64` / `Release` でビルド
 - `Folder`: `Select` からフォルダーを選択できます。
 - `Windows Settings`: `Choose` から表示、サウンド、ネットワーク、Windows Update などの設定先を選択できます。`ms-settings:` などの Windows 設定 URI を直接入力することもできます。
 - `Volume Up` / `Volume Down` / `Mute`: 音量操作を実行します。
+- `Play/Pause` / `Next Track` / `Previous Track` / `Stop Media`: メディア再生を制御します。
 - `Screenshot`: Print Screen キーを送信します。
 - `Command`: コマンドと引数を分けて入力します。
 - `Keys`: `CTRL+ALT+T` のようなキー同時押しを入力します。
