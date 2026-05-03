@@ -1016,6 +1016,7 @@ struct FavoriteLink {
 struct AppCandidate {
     std::wstring title;
     std::wstring target;
+    std::wstring args;
 };
 
 static bool IsWebUrl(const std::wstring& value) {
@@ -1119,22 +1120,27 @@ static void CollectChromiumBookmarks(const std::wstring& path, std::vector<Favor
     }
 }
 
-static std::wstring ResolveShortcutTarget(const std::wstring& shortcutPath) {
+static bool ResolveShortcutTarget(const std::wstring& shortcutPath, std::wstring& target, std::wstring& args) {
     IShellLinkW* link = nullptr;
-    if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&link)))) return L"";
+    if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&link)))) return false;
     IPersistFile* file = nullptr;
-    std::wstring target;
+    bool success = false;
     if (SUCCEEDED(link->QueryInterface(IID_PPV_ARGS(&file)))) {
         if (SUCCEEDED(file->Load(shortcutPath.c_str(), STGM_READ))) {
             wchar_t path[MAX_PATH]{};
             if (SUCCEEDED(link->GetPath(path, MAX_PATH, nullptr, SLGP_UNCPRIORITY)) && path[0]) {
                 target = path;
+                success = true;
+            }
+            wchar_t argsBuf[INFOTIPSIZE]{};
+            if (SUCCEEDED(link->GetArguments(argsBuf, INFOTIPSIZE)) && argsBuf[0]) {
+                args = argsBuf;
             }
         }
         file->Release();
     }
     link->Release();
-    return target;
+    return success;
 }
 
 static void CollectStartMenuShortcuts(const std::wstring& dir, std::vector<AppCandidate>& apps) {
@@ -1148,12 +1154,14 @@ static void CollectStartMenuShortcuts(const std::wstring& dir, std::vector<AppCa
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
             CollectStartMenuShortcuts(path, apps);
         } else if (_wcsicmp(PathFindExtensionW(path.c_str()), L".lnk") == 0) {
-            std::wstring target = ResolveShortcutTarget(path);
-            if (!target.empty() && _wcsicmp(PathFindExtensionW(target.c_str()), L".exe") == 0) {
-                wchar_t title[MAX_PATH]{};
-                wcscpy_s(title, fd.cFileName);
-                PathRemoveExtensionW(title);
-                apps.push_back({ title, target });
+            std::wstring target, args;
+            if (ResolveShortcutTarget(path, target, args)) {
+                if (_wcsicmp(PathFindExtensionW(target.c_str()), L".exe") == 0) {
+                    wchar_t title[MAX_PATH]{};
+                    wcscpy_s(title, fd.cFileName);
+                    PathRemoveExtensionW(title);
+                    apps.push_back({ title, target, args });
+                }
             }
         }
     } while (FindNextFileW(find, &fd));
@@ -1176,7 +1184,7 @@ static std::vector<AppCandidate> LoadStartMenuApps() {
         return _wcsicmp(a.title.c_str(), b.title.c_str()) < 0;
     });
     apps.erase(std::unique(apps.begin(), apps.end(), [](const AppCandidate& a, const AppCandidate& b) {
-        return _wcsicmp(a.target.c_str(), b.target.c_str()) == 0;
+        return _wcsicmp(a.target.c_str(), b.target.c_str()) == 0 && wcscmp(a.args.c_str(), b.args.c_str()) == 0;
     }), apps.end());
     return apps;
 }
@@ -1440,6 +1448,7 @@ static void ImportStartMenuApp(HWND hwnd) {
     if (ctx.accepted && ctx.selectedIndex >= 0 && ctx.selectedIndex < static_cast<int>(ctx.apps.size())) {
         const AppCandidate& app = ctx.apps[ctx.selectedIndex];
         SetWindowTextW(GetDlgItem(hwnd, IDC_TARGET), app.target.c_str());
+        SetWindowTextW(GetDlgItem(hwnd, IDC_ARGS), app.args.c_str());
         if (GetWindowTextLengthW(GetDlgItem(hwnd, IDC_TITLE)) == 0) SetWindowTextW(GetDlgItem(hwnd, IDC_TITLE), app.title.c_str());
         if (GetWindowTextLengthW(GetDlgItem(hwnd, IDC_TEXT)) == 0) {
             std::wstring text = TextBadgeFromTitle(app.title, L"APP");
