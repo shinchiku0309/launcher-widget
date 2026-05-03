@@ -1339,6 +1339,76 @@ static void ImportFavoriteUrl(HWND hwnd) {
     }
 }
 
+struct StartMenuSelectorContext {
+    std::vector<AppCandidate> apps;
+    int selectedIndex = -1;
+    bool accepted = false;
+};
+
+static constexpr int IDC_STARTMENU_LIST = 4001;
+
+static void RunOwnedModal(HWND dialog);
+
+static LRESULT CALLBACK StartMenuProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    StartMenuSelectorContext* ctx = reinterpret_cast<StartMenuSelectorContext*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+    switch (msg) {
+    case WM_CREATE: {
+        auto* cs = reinterpret_cast<CREATESTRUCTW*>(lp);
+        ctx = reinterpret_cast<StartMenuSelectorContext*>(cs->lpCreateParams);
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(ctx));
+        
+        HWND list = CreateWindowExW(0, L"LISTBOX", nullptr,
+            WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_BORDER | LBS_NOTIFY | LBS_HASSTRINGS | LBS_WANTKEYBOARDINPUT,
+            20, 20, 440, 360, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_STARTMENU_LIST)), g.instance, nullptr);
+        
+        SendMessageW(list, WM_SETFONT, reinterpret_cast<WPARAM>(g.uiFont), FALSE);
+        
+        for (const auto& app : ctx->apps) {
+            std::wstring label = app.title.empty() ? app.target : app.title;
+            SendMessageW(list, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label.c_str()));
+        }
+        
+        AddButton(hwnd, IDOK, L"OK", 250, 400, 100, 34, BS_DEFPUSHBUTTON);
+        AddButton(hwnd, IDCANCEL, L"Cancel", 360, 400, 100, 34);
+        
+        SetFocus(list);
+        return 0;
+    }
+    case WM_COMMAND:
+        if (LOWORD(wp) == IDC_STARTMENU_LIST) {
+            if (HIWORD(wp) == LBN_DBLCLK) {
+                SendMessageW(hwnd, WM_COMMAND, MAKEWPARAM(IDOK, BN_CLICKED), 0);
+            }
+            return 0;
+        }
+        if (LOWORD(wp) == IDOK && ctx) {
+            HWND list = GetDlgItem(hwnd, IDC_STARTMENU_LIST);
+            int sel = static_cast<int>(SendMessageW(list, LB_GETCURSEL, 0, 0));
+            if (sel >= 0 && sel < static_cast<int>(ctx->apps.size())) {
+                ctx->selectedIndex = sel;
+                ctx->accepted = true;
+                DestroyWindow(hwnd);
+            }
+            return 0;
+        }
+        if (LOWORD(wp) == IDCANCEL) {
+            DestroyWindow(hwnd);
+            return 0;
+        }
+        break;
+    case WM_CLOSE:
+        DestroyWindow(hwnd);
+        return 0;
+    case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLORBTN:
+        return DialogControlColor(wp);
+    case WM_CTLCOLOREDIT:
+    case WM_CTLCOLORLISTBOX:
+        return DialogFieldColor(wp);
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
 static void ImportStartMenuApp(HWND hwnd) {
     std::vector<AppCandidate> apps = LoadStartMenuApps();
     if (apps.empty()) {
@@ -1346,19 +1416,29 @@ static void ImportStartMenuApp(HWND hwnd) {
         return;
     }
 
-    HMENU menu = CreatePopupMenu();
-    const int maxItems = std::min<int>(static_cast<int>(apps.size()), 80);
-    for (int i = 0; i < maxItems; ++i) {
-        std::wstring label = apps[i].title.empty() ? apps[i].target : apps[i].title;
-        if (label.size() > 72) label = label.substr(0, 69) + L"...";
-        AppendMenuW(menu, MF_STRING, 6000 + i, label.c_str());
+    StartMenuSelectorContext ctx{};
+    ctx.apps = std::move(apps);
+
+    static bool registered = false;
+    if (!registered) {
+        WNDCLASSW wc{};
+        wc.lpfnWndProc = StartMenuProc;
+        wc.hInstance = g.instance;
+        wc.lpszClassName = L"LauncherStartMenuSelector";
+        wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+        wc.hbrBackground = DialogBrush();
+        RegisterClassW(&wc);
+        registered = true;
     }
-    RECT rc{};
-    GetWindowRect(GetDlgItem(hwnd, IDC_URL_IMPORT), &rc);
-    int cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, rc.left, rc.bottom, 0, hwnd, nullptr);
-    DestroyMenu(menu);
-    if (cmd >= 6000 && cmd < 6000 + maxItems) {
-        const AppCandidate& app = apps[cmd - 6000];
+
+    HWND dialog = CreateWindowExW(WS_EX_DLGMODALFRAME, L"LauncherStartMenuSelector", L"Start menu",
+        WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT, 500, 500,
+        hwnd, nullptr, g.instance, &ctx);
+    
+    RunOwnedModal(dialog);
+
+    if (ctx.accepted && ctx.selectedIndex >= 0 && ctx.selectedIndex < static_cast<int>(ctx.apps.size())) {
+        const AppCandidate& app = ctx.apps[ctx.selectedIndex];
         SetWindowTextW(GetDlgItem(hwnd, IDC_TARGET), app.target.c_str());
         if (GetWindowTextLengthW(GetDlgItem(hwnd, IDC_TITLE)) == 0) SetWindowTextW(GetDlgItem(hwnd, IDC_TITLE), app.title.c_str());
         if (GetWindowTextLengthW(GetDlgItem(hwnd, IDC_TEXT)) == 0) {
