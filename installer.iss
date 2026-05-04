@@ -2,7 +2,7 @@
 ; ----------------------------------------------------------------------------
 #define AppName "Launcher Widget"
 #define AppVersion "1.0"
-#define AppPublisher "hiza-NAS"
+#define AppPublisher "Launcher Widget Contributors"
 #define AppExeName "Launcher.exe"
 #define AppId "{{8F2A4C3E-1D7B-4A9F-B6C2-3E5D8F1A2B4C}"
 
@@ -14,9 +14,9 @@ AppPublisher={#AppPublisher}
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 AllowNoIcons=yes
-OutputDir=D:\workspace\Launcher\bin\Installer
+OutputDir=bin\Installer
 OutputBaseFilename=LauncherSetup
-SetupIconFile=D:\workspace\Launcher\app.ico
+SetupIconFile=app.ico
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
@@ -33,7 +33,7 @@ Name: "desktopicon"; Description: "デスクトップにショートカットを
 Name: "startuprun"; Description: "Windows 起動時に自動で実行する"; GroupDescription: "追加タスク:"; Flags: unchecked
 
 [Files]
-Source: "D:\workspace\Launcher\bin\Release\{#AppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "bin\Release\{#AppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}"
