@@ -54,6 +54,7 @@ struct AppConfig {
     int windowY = CW_USEDEFAULT;
     bool alwaysOnTop = true;
     bool showTrayIcon = false;
+    int keyboardLayout = 106;
     std::vector<int> pageOrder;
     std::map<int, std::wstring> pageNames;
     std::map<int, std::vector<ButtonConfig>> pages;
@@ -146,6 +147,15 @@ static constexpr int IDC_ADD_PAGE = 3111;
 static constexpr int IDC_PAGE_LIST = 3112;
 static constexpr int IDC_PAGE_MOVE_UP = 3113;
 static constexpr int IDC_PAGE_MOVE_DOWN = 3114;
+static constexpr int IDC_KEYBOARD_LAYOUT = 3115;
+static constexpr int IDC_KEY_MODE = 3201;
+static constexpr int IDC_KEY_SPEC = 3202;
+static constexpr int IDC_KEY_CTRL = 3203;
+static constexpr int IDC_KEY_ALT = 3204;
+static constexpr int IDC_KEY_SHIFT = 3205;
+static constexpr int IDC_KEY_WIN = 3206;
+static constexpr int IDC_KEY_CLEAR = 3207;
+static constexpr int IDC_KEY_BUTTON_BASE = 6000;
 
 static std::wstring Utf8ToWide(const std::string& value) {
     if (value.empty()) return L"";
@@ -301,6 +311,7 @@ static void LoadConfig() {
     g.config.windowY = GetPrivateProfileIntW(L"Window", L"Y", CW_USEDEFAULT, g.configPath.c_str());
     g.config.alwaysOnTop = GetPrivateProfileIntW(L"Window", L"AlwaysOnTop", 1, g.configPath.c_str()) != 0;
     g.config.showTrayIcon = GetPrivateProfileIntW(L"Window", L"ShowTrayIcon", 0, g.configPath.c_str()) != 0;
+    g.config.keyboardLayout = GetPrivateProfileIntW(L"Window", L"KeyboardLayout", 106, g.configPath.c_str()) == 101 ? 101 : 106;
     wchar_t pageOrder[4096]{};
     GetPrivateProfileStringW(L"Window", L"PageOrder", L"", pageOrder, 4096, g.configPath.c_str());
     g.config.pageOrder = ParsePageOrder(pageOrder);
@@ -349,6 +360,7 @@ static void SaveConfig() {
     WritePrivateProfileStringW(L"Window", L"Y", std::to_wstring(g.config.windowY).c_str(), g.configPath.c_str());
     WritePrivateProfileStringW(L"Window", L"AlwaysOnTop", g.config.alwaysOnTop ? L"1" : L"0", g.configPath.c_str());
     WritePrivateProfileStringW(L"Window", L"ShowTrayIcon", g.config.showTrayIcon ? L"1" : L"0", g.configPath.c_str());
+    WritePrivateProfileStringW(L"Window", L"KeyboardLayout", std::to_wstring(g.config.keyboardLayout).c_str(), g.configPath.c_str());
     WritePrivateProfileStringW(L"Window", L"UiVersion", L"2", g.configPath.c_str());
     WritePrivateProfileStringW(L"Window", L"PageOrder", JoinPageOrder(g.config.pageOrder).c_str(), g.configPath.c_str());
 
@@ -910,6 +922,33 @@ static WORD VkFromToken(std::wstring token) {
     if (token == L"NEXTTRACK" || token == L"NEXT_TRACK" || token == L"MEDIA_NEXT_TRACK") return VK_MEDIA_NEXT_TRACK;
     if (token == L"PREVTRACK" || token == L"PREVIOUS_TRACK" || token == L"MEDIA_PREV_TRACK") return VK_MEDIA_PREV_TRACK;
     if (token == L"MEDIASTOP" || token == L"MEDIA_STOP") return VK_MEDIA_STOP;
+    if (token == L"ENTER" || token == L"RETURN") return VK_RETURN;
+    if (token == L"ESC" || token == L"ESCAPE") return VK_ESCAPE;
+    if (token == L"TAB") return VK_TAB;
+    if (token == L"SPACE") return VK_SPACE;
+    if (token == L"BACKSPACE" || token == L"BKSP") return VK_BACK;
+    if (token == L"DELETE" || token == L"DEL") return VK_DELETE;
+    if (token == L"INSERT" || token == L"INS") return VK_INSERT;
+    if (token == L"HOME") return VK_HOME;
+    if (token == L"END") return VK_END;
+    if (token == L"PAGEUP" || token == L"PGUP") return VK_PRIOR;
+    if (token == L"PAGEDOWN" || token == L"PGDN") return VK_NEXT;
+    if (token == L"UP") return VK_UP;
+    if (token == L"DOWN") return VK_DOWN;
+    if (token == L"LEFT") return VK_LEFT;
+    if (token == L"RIGHT") return VK_RIGHT;
+    if (token == L"OEM_PLUS") return VK_OEM_PLUS;
+    if (token == L"OEM_MINUS") return VK_OEM_MINUS;
+    if (token == L"OEM_COMMA") return VK_OEM_COMMA;
+    if (token == L"OEM_PERIOD") return VK_OEM_PERIOD;
+    if (token == L"OEM_1") return VK_OEM_1;
+    if (token == L"OEM_2") return VK_OEM_2;
+    if (token == L"OEM_3") return VK_OEM_3;
+    if (token == L"OEM_4") return VK_OEM_4;
+    if (token == L"OEM_5") return VK_OEM_5;
+    if (token == L"OEM_6") return VK_OEM_6;
+    if (token == L"OEM_7") return VK_OEM_7;
+    if (token == L"OEM_102") return VK_OEM_102;
     if (token.size() == 1) return VkKeyScanW(token[0]) & 0xff;
     if (token.size() > 1 && token[0] == L'F') {
         int n = _wtoi(token.c_str() + 1);
@@ -943,6 +982,24 @@ static void SendKeyChord(const std::wstring& spec) {
     if (!inputs.empty()) SendInput(static_cast<UINT>(inputs.size()), inputs.data(), sizeof(INPUT));
 }
 
+static void SendKeySpec(const std::wstring& spec) {
+    std::wstring trimmed = Trim(spec);
+    if (trimmed.rfind(L"SEQ:", 0) != 0) {
+        SendKeyChord(trimmed);
+        return;
+    }
+
+    std::wstringstream ss(trimmed.substr(4));
+    std::wstring chord;
+    while (std::getline(ss, chord, L',')) {
+        chord = Trim(chord);
+        if (!chord.empty()) {
+            SendKeyChord(chord);
+            Sleep(40);
+        }
+    }
+}
+
 static void ExecuteAction(const Action& action) {
     switch (action.type) {
     case ActionType::Open:
@@ -961,7 +1018,7 @@ static void ExecuteAction(const Action& action) {
         break;
     }
     case ActionType::Keys:
-        SendKeyChord(action.target);
+        SendKeySpec(action.target);
         break;
     default:
         break;
@@ -1438,6 +1495,10 @@ static bool IsSystemKeyKind(const std::wstring& kind) {
         kind == L"Play/Pause" || kind == L"Next Track" || kind == L"Previous Track" || kind == L"Stop Media";
 }
 
+static bool IsSequenceKeySpec(const std::wstring& spec) {
+    return Trim(spec).rfind(L"SEQ:", 0) == 0;
+}
+
 static std::wstring SystemKeyTarget(const std::wstring& kind) {
     if (kind == L"Volume Up") return L"VOLUME_UP";
     if (kind == L"Volume Down") return L"VOLUME_DOWN";
@@ -1487,7 +1548,7 @@ static void UpdateButtonEditorFields(HWND hwnd) {
 
     bool needsTarget = kind != L"None" && !IsSystemKeyKind(kind);
     bool needsArgs = kind == L"App (.exe)" || kind == L"File" || kind == L"Command";
-    bool canBrowse = kind == L"App (.exe)" || kind == L"File" || kind == L"Folder";
+    bool canBrowse = kind == L"App (.exe)" || kind == L"File" || kind == L"Folder" || kind == L"Keys";
     bool canImport = kind == L"URL" || kind == L"App (.exe)" || kind == L"Windows Settings";
 
     SetWindowTextW(targetLabel, kind == L"URL" ? L"URL" :
@@ -1497,7 +1558,8 @@ static void UpdateButtonEditorFields(HWND hwnd) {
         kind == L"Folder" ? L"Folder" :
         kind == L"File" ? L"File" : L"Target");
     SetWindowTextW(argsLabel, kind == L"Command" ? L"Arguments" : L"Options");
-    SetWindowTextW(browse, kind == L"Folder" ? L"Folder" : L"Select");
+    SetWindowTextW(browse, kind == L"Folder" ? L"Folder" :
+        kind == L"Keys" ? L"Choose" : L"Select");
     SetWindowTextW(import, kind == L"App (.exe)" ? L"Start menu" :
         kind == L"Windows Settings" ? L"Choose" : L"Favorites");
 
@@ -1512,6 +1574,9 @@ static void UpdateButtonEditorFields(HWND hwnd) {
         MoveWindow(target, 220, 118, 588, 34, TRUE);
         MoveWindow(import, 842, 118, 116, 34, TRUE);
     } else if (kind == L"File" || kind == L"Folder") {
+        MoveWindow(target, 220, 118, 588, 34, TRUE);
+        MoveWindow(browse, 842, 118, 116, 34, TRUE);
+    } else if (kind == L"Keys") {
         MoveWindow(target, 220, 118, 588, 34, TRUE);
         MoveWindow(browse, 842, 118, 116, 34, TRUE);
     } else {
@@ -1758,6 +1823,157 @@ static void FillDisplayDefaults(HWND hwnd, const std::wstring& kind) {
     }
 }
 
+struct KeyChoice {
+    const wchar_t* label101;
+    const wchar_t* label106;
+    const wchar_t* token;
+};
+
+static const KeyChoice kKeyChoices[] = {
+    { L"A", L"A", L"A" }, { L"B", L"B", L"B" }, { L"C", L"C", L"C" }, { L"D", L"D", L"D" },
+    { L"E", L"E", L"E" }, { L"F", L"F", L"F" }, { L"G", L"G", L"G" }, { L"H", L"H", L"H" },
+    { L"I", L"I", L"I" }, { L"J", L"J", L"J" }, { L"K", L"K", L"K" }, { L"L", L"L", L"L" },
+    { L"M", L"M", L"M" }, { L"N", L"N", L"N" }, { L"O", L"O", L"O" }, { L"P", L"P", L"P" },
+    { L"Q", L"Q", L"Q" }, { L"R", L"R", L"R" }, { L"S", L"S", L"S" }, { L"T", L"T", L"T" },
+    { L"U", L"U", L"U" }, { L"V", L"V", L"V" }, { L"W", L"W", L"W" }, { L"X", L"X", L"X" },
+    { L"Y", L"Y", L"Y" }, { L"Z", L"Z", L"Z" },
+    { L"0", L"0", L"0" }, { L"1", L"1", L"1" }, { L"2", L"2", L"2" }, { L"3", L"3", L"3" },
+    { L"4", L"4", L"4" }, { L"5", L"5", L"5" }, { L"6", L"6", L"6" }, { L"7", L"7", L"7" },
+    { L"8", L"8", L"8" }, { L"9", L"9", L"9" },
+    { L"F1", L"F1", L"F1" }, { L"F2", L"F2", L"F2" }, { L"F3", L"F3", L"F3" }, { L"F4", L"F4", L"F4" },
+    { L"F5", L"F5", L"F5" }, { L"F6", L"F6", L"F6" }, { L"F7", L"F7", L"F7" }, { L"F8", L"F8", L"F8" },
+    { L"F9", L"F9", L"F9" }, { L"F10", L"F10", L"F10" }, { L"F11", L"F11", L"F11" }, { L"F12", L"F12", L"F12" },
+    { L"Enter", L"Enter", L"ENTER" }, { L"Esc", L"Esc", L"ESC" }, { L"Tab", L"Tab", L"TAB" }, { L"Space", L"Space", L"SPACE" },
+    { L"Back", L"Back", L"BACKSPACE" }, { L"Delete", L"Delete", L"DELETE" }, { L"Insert", L"Insert", L"INSERT" },
+    { L"Home", L"Home", L"HOME" }, { L"End", L"End", L"END" }, { L"PgUp", L"PgUp", L"PAGEUP" }, { L"PgDn", L"PgDn", L"PAGEDOWN" },
+    { L"Up", L"Up", L"UP" }, { L"Down", L"Down", L"DOWN" }, { L"Left", L"Left", L"LEFT" }, { L"Right", L"Right", L"RIGHT" },
+    { L"-", L"-", L"OEM_MINUS" }, { L"=", L"^", L"OEM_PLUS" }, { L"[", L"@", L"OEM_4" }, { L"]", L"[", L"OEM_6" },
+    { L"\\", L"]", L"OEM_5" }, { L";", L";", L"OEM_1" }, { L"'", L":", L"OEM_7" }, { L",", L",", L"OEM_COMMA" },
+    { L".", L".", L"OEM_PERIOD" }, { L"/", L"/", L"OEM_2" }, { L"Grave", L"Hankaku", L"OEM_3" }, { L"Intl", L"Yen", L"OEM_102" }
+};
+
+struct KeyPickerContext {
+    std::wstring spec;
+    bool accepted = false;
+};
+
+static std::wstring KeyPickerChord(HWND hwnd, const wchar_t* token) {
+    std::wstring chord;
+    if (SendMessageW(GetDlgItem(hwnd, IDC_KEY_CTRL), BM_GETCHECK, 0, 0) == BST_CHECKED) chord += L"CTRL+";
+    if (SendMessageW(GetDlgItem(hwnd, IDC_KEY_ALT), BM_GETCHECK, 0, 0) == BST_CHECKED) chord += L"ALT+";
+    if (SendMessageW(GetDlgItem(hwnd, IDC_KEY_SHIFT), BM_GETCHECK, 0, 0) == BST_CHECKED) chord += L"SHIFT+";
+    if (SendMessageW(GetDlgItem(hwnd, IDC_KEY_WIN), BM_GETCHECK, 0, 0) == BST_CHECKED) chord += L"WIN+";
+    chord += token;
+    return chord;
+}
+
+static bool KeyPickerSequenceMode(HWND hwnd) {
+    return ComboText(GetDlgItem(hwnd, IDC_KEY_MODE)) == L"Sequence";
+}
+
+static void KeyPickerAddSpec(HWND hwnd, const std::wstring& chord) {
+    HWND edit = GetDlgItem(hwnd, IDC_KEY_SPEC);
+    std::wstring current = Trim(GetWindowTextString(edit));
+    if (!KeyPickerSequenceMode(hwnd)) {
+        SetWindowTextW(edit, chord.c_str());
+        return;
+    }
+    if (current.rfind(L"SEQ:", 0) != 0) current = L"SEQ:";
+    if (current.size() > 4) current += L",";
+    current += chord;
+    SetWindowTextW(edit, current.c_str());
+}
+
+static LRESULT CALLBACK KeyPickerProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    KeyPickerContext* ctx = reinterpret_cast<KeyPickerContext*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+    switch (msg) {
+    case WM_CREATE: {
+        auto* cs = reinterpret_cast<CREATESTRUCTW*>(lp);
+        ctx = reinterpret_cast<KeyPickerContext*>(cs->lpCreateParams);
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(ctx));
+        AddLabel(hwnd, L"Mode", 24, 22, 80, 24);
+        HWND mode = AddCombo(hwnd, IDC_KEY_MODE, 88, 18, 160, 160);
+        SendMessageW(mode, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Simultaneous"));
+        SendMessageW(mode, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Sequence"));
+        SendMessageW(mode, CB_SETCURSEL, IsSequenceKeySpec(ctx->spec) ? 1 : 0, 0);
+        AddButton(hwnd, IDC_KEY_CTRL, L"Ctrl", 270, 18, 72, 30, BS_AUTOCHECKBOX);
+        AddButton(hwnd, IDC_KEY_ALT, L"Alt", 348, 18, 72, 30, BS_AUTOCHECKBOX);
+        AddButton(hwnd, IDC_KEY_SHIFT, L"Shift", 426, 18, 72, 30, BS_AUTOCHECKBOX);
+        AddButton(hwnd, IDC_KEY_WIN, L"Win", 504, 18, 72, 30, BS_AUTOCHECKBOX);
+        AddEdit(hwnd, IDC_KEY_SPEC, ctx->spec, 24, 62, 552, 34);
+        AddButton(hwnd, IDC_KEY_CLEAR, L"Clear", 588, 62, 82, 34);
+
+        const int cols = 12;
+        const int w = 72;
+        const int h = 32;
+        const int gap = 8;
+        for (int i = 0; i < static_cast<int>(sizeof(kKeyChoices) / sizeof(kKeyChoices[0])); ++i) {
+            int x = 24 + (i % cols) * (w + gap);
+            int y = 116 + (i / cols) * (h + gap);
+            const wchar_t* label = g.config.keyboardLayout == 101 ? kKeyChoices[i].label101 : kKeyChoices[i].label106;
+            AddButton(hwnd, IDC_KEY_BUTTON_BASE + i, label, x, y, w, h);
+        }
+        AddButton(hwnd, IDOK, L"OK", 760, 520, 96, 38, BS_DEFPUSHBUTTON);
+        AddButton(hwnd, IDCANCEL, L"Cancel", 868, 520, 104, 38);
+        return 0;
+    }
+    case WM_COMMAND: {
+        int id = LOWORD(wp);
+        if (id >= IDC_KEY_BUTTON_BASE && id < IDC_KEY_BUTTON_BASE + static_cast<int>(sizeof(kKeyChoices) / sizeof(kKeyChoices[0]))) {
+            const KeyChoice& key = kKeyChoices[id - IDC_KEY_BUTTON_BASE];
+            KeyPickerAddSpec(hwnd, KeyPickerChord(hwnd, key.token));
+            return 0;
+        }
+        if (id == IDC_KEY_CLEAR) {
+            SetWindowTextW(GetDlgItem(hwnd, IDC_KEY_SPEC), L"");
+            return 0;
+        }
+        if (id == IDOK && ctx) {
+            ctx->spec = GetWindowTextString(GetDlgItem(hwnd, IDC_KEY_SPEC));
+            ctx->accepted = true;
+            DestroyWindow(hwnd);
+            return 0;
+        }
+        if (id == IDCANCEL) {
+            DestroyWindow(hwnd);
+            return 0;
+        }
+        break;
+    }
+    case WM_CLOSE:
+        DestroyWindow(hwnd);
+        return 0;
+    case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLORBTN:
+        return DialogControlColor(wp);
+    case WM_CTLCOLOREDIT:
+    case WM_CTLCOLORLISTBOX:
+        return DialogFieldColor(wp);
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+static std::wstring ChooseKeySpec(HWND owner, const std::wstring& current) {
+    KeyPickerContext ctx{};
+    ctx.spec = current;
+    static bool registered = false;
+    if (!registered) {
+        WNDCLASSW wc{};
+        wc.lpfnWndProc = KeyPickerProc;
+        wc.hInstance = g.instance;
+        wc.lpszClassName = L"LauncherKeyPicker";
+        wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+        wc.hbrBackground = DialogBrush();
+        RegisterClassW(&wc);
+        registered = true;
+    }
+    HWND dialog = CreateWindowExW(WS_EX_DLGMODALFRAME, L"LauncherKeyPicker", L"Choose Keys",
+        WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT, 1010, 620,
+        owner, nullptr, g.instance, &ctx);
+    RunOwnedModal(dialog);
+    return ctx.accepted ? ctx.spec : L"";
+}
+
 static LRESULT CALLBACK ButtonEditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     ButtonEditorContext* ctx = reinterpret_cast<ButtonEditorContext*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
     switch (msg) {
@@ -1814,6 +2030,7 @@ static LRESULT CALLBACK ButtonEditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
             if (kind == L"App (.exe)") target = BrowseForTarget(hwnd, L"Applications\0*.exe\0All files\0*.*\0");
             else if (kind == L"File") target = BrowseForTarget(hwnd, L"All files\0*.*\0");
             else if (kind == L"Folder") target = BrowseForFolder(hwnd);
+            else if (kind == L"Keys") target = ChooseKeySpec(hwnd, GetWindowTextString(GetDlgItem(hwnd, IDC_TARGET)));
             if (!target.empty()) {
                 SetWindowTextW(GetDlgItem(hwnd, IDC_TARGET), target.c_str());
                 FillDisplayDefaults(hwnd, kind);
@@ -1969,14 +2186,19 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
         AddEdit(hwnd, IDC_BUTTON_SIZE, std::to_wstring(ctx->original.buttonSize), 230, 170, 160, 34);
         AddLabel(hwnd, L"Gap", 56, 222, 150, 28);
         AddEdit(hwnd, IDC_GAP, std::to_wstring(ctx->original.gap), 230, 218, 160, 34);
-        AddButton(hwnd, IDC_TOPMOST, L"Always on top", 230, 278, 260, 36, BS_AUTOCHECKBOX);
+        AddLabel(hwnd, L"Keyboard", 56, 270, 150, 28);
+        HWND keyboard = AddCombo(hwnd, IDC_KEYBOARD_LAYOUT, 230, 266, 160, 120);
+        SendMessageW(keyboard, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"106"));
+        SendMessageW(keyboard, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"101"));
+        SendMessageW(keyboard, CB_SETCURSEL, ctx->original.keyboardLayout == 101 ? 1 : 0, 0);
+        AddButton(hwnd, IDC_TOPMOST, L"Always on top", 230, 322, 260, 36, BS_AUTOCHECKBOX);
         SendMessageW(GetDlgItem(hwnd, IDC_TOPMOST), BM_SETCHECK, ctx->original.alwaysOnTop ? BST_CHECKED : BST_UNCHECKED, 0);
-        AddButton(hwnd, IDC_TRAY_ICON, L"Show tray icon", 230, 322, 260, 36, BS_AUTOCHECKBOX);
+        AddButton(hwnd, IDC_TRAY_ICON, L"Show tray icon", 230, 366, 260, 36, BS_AUTOCHECKBOX);
         SendMessageW(GetDlgItem(hwnd, IDC_TRAY_ICON), BM_SETCHECK, ctx->original.showTrayIcon ? BST_CHECKED : BST_UNCHECKED, 0);
-        AddButton(hwnd, IDC_RUN_ON_STARTUP, L"Run on Windows startup", 230, 366, 260, 36, BS_AUTOCHECKBOX);
+        AddButton(hwnd, IDC_RUN_ON_STARTUP, L"Run on Windows startup", 230, 410, 260, 36, BS_AUTOCHECKBOX);
         SendMessageW(GetDlgItem(hwnd, IDC_RUN_ON_STARTUP), BM_SETCHECK, IsRunOnStartupEnabled() ? BST_CHECKED : BST_UNCHECKED, 0);
-        AddButton(hwnd, IDOK, L"OK", 344, 420, 96, 38, BS_DEFPUSHBUTTON);
-        AddButton(hwnd, IDCANCEL, L"Cancel", 456, 420, 104, 38);
+        AddButton(hwnd, IDOK, L"OK", 344, 468, 96, 38, BS_DEFPUSHBUTTON);
+        AddButton(hwnd, IDCANCEL, L"Cancel", 456, 468, 104, 38);
         return 0;
     }
     case WM_COMMAND:
@@ -1985,6 +2207,7 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
             g.config.cols = std::max(1, std::min(12, _wtoi(GetWindowTextString(GetDlgItem(hwnd, IDC_COLS)).c_str())));
             g.config.buttonSize = std::max(64, std::min(220, _wtoi(GetWindowTextString(GetDlgItem(hwnd, IDC_BUTTON_SIZE)).c_str())));
             g.config.gap = std::max(4, std::min(32, _wtoi(GetWindowTextString(GetDlgItem(hwnd, IDC_GAP)).c_str())));
+            g.config.keyboardLayout = ComboText(GetDlgItem(hwnd, IDC_KEYBOARD_LAYOUT)) == L"101" ? 101 : 106;
             g.config.alwaysOnTop = SendMessageW(GetDlgItem(hwnd, IDC_TOPMOST), BM_GETCHECK, 0, 0) == BST_CHECKED;
             g.config.showTrayIcon = SendMessageW(GetDlgItem(hwnd, IDC_TRAY_ICON), BM_GETCHECK, 0, 0) == BST_CHECKED;
             SetRunOnStartup(SendMessageW(GetDlgItem(hwnd, IDC_RUN_ON_STARTUP), BM_GETCHECK, 0, 0) == BST_CHECKED);
@@ -2025,7 +2248,7 @@ static void ShowSettingsDialog() {
         registered = true;
     }
     HWND dialog = CreateWindowExW(WS_EX_DLGMODALFRAME, L"LauncherSettingsEditor", L"Settings",
-        WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT, 600, 520,
+        WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT, 600, 570,
         g.hwnd, nullptr, g.instance, &ctx);
     RunOwnedModal(dialog);
     if (ctx.accepted) {

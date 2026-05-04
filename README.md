@@ -17,6 +17,7 @@ Windows 11 向けの軽量ランチャーウィジェットです。C++ と Win3
 - 行数、列数、ボタンサイズ、余白の設定。
 - ボタンごとのタイトル、絵文字またはテキスト、アクション種別、実行対象、引数、カスタム画像パスの設定。
 - アプリ、ファイル、フォルダー、URL、Windows 設定 URI、コマンド、簡単なキー同時押し、音量操作、メディア操作、スクリーンショットの実行。
+- Keys の選択ダイアログによる代表キー、修飾キー、同時押下、順次押下の設定。
 - `.exe`、`.lnk`、通常のシェル対象からのアイコン抽出。
 - GDI+ による `.png`、`.jpg`、`.jpeg`、`.bmp`、`.gif`、`.ico` のカスタム画像表示。
 - 設定上は `.svg` パスを受け付けますが、現在の Win32 描画では小型の SVG ラスタライズ処理を内蔵していないため、表示はテキストまたは絵文字にフォールバックします。
@@ -38,6 +39,7 @@ Visual Studio 2022 で `Launcher.sln` を開き、`x64` / `Release` でビルド
 - 右クリックメニューの `Settings`: グリッドやウィンドウ設定を編集します。
 - ページ名を右クリック: `Page settings`、`Add page`、`Delete page` を開けます。`Add page` は現在ページの次に新しいページを追加します。
 - `Page settings`: ページ一覧からページ名の変更、ページ追加、ページ削除、`Move up` / `Move down` による表示順の変更ができます。
+- `Settings` の `Keyboard`: Keys 選択ダイアログの表示ラベルを `106` / `101` から選べます。
 
 ## ボタン設定
 
@@ -52,7 +54,7 @@ Visual Studio 2022 で `Launcher.sln` を開き、`x64` / `Release` でビルド
 - `Play/Pause` / `Next Track` / `Previous Track` / `Stop Media`: メディア再生を制御します。
 - `Screenshot`: Print Screen キーを送信します。
 - `Command`: コマンドと引数を分けて入力します。
-- `Keys`: `CTRL+ALT+T` のようなキー同時押しを入力します。
+- `Keys`: `Choose` から代表キーと修飾キーを選べます。`CTRL+ALT+T` のような同時押下に加え、`SEQ:CTRL+C,CTRL+V` のような順次押下も入力できます。
 - `None`: 何もしないボタンにします。
 
 画像を指定しない場合、`.exe` はアプリのアイコン、URL はサイトの favicon を自動表示します。取得できない場合は表示テキストにフォールバックします。
@@ -68,7 +70,7 @@ Visual Studio 2022 で `Launcher.sln` を開き、`x64` / `Release` でビルド
 - `Open`: `ShellExecute` により、アプリ、ファイル、フォルダー、ショートカット、URL を開きます。
 - `Command`: 任意のコマンドラインを、必要に応じて引数付きで起動します。
 - `Settings`: `ms-settings:display` などの Windows 設定 URI を開きます。
-- `Keys`: `CTRL+ALT+T` のような簡単なキー同時押し、音量、メディア、Print Screen を送信します。
+- `Keys`: `CTRL+ALT+T` のような簡単なキー同時押し、`SEQ:` 形式の順次押下、音量、メディア、Print Screen を送信します。
 - `None`: 何もしません。
 
 ## マクロ機能の方向性
