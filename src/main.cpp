@@ -8,7 +8,8 @@
 #include <shlobj.h>
 #include <shlwapi.h>
 #include <commdlg.h>
-#include <gdiplus.h>
+#include <wincodec.h>
+#include <dwmapi.h>
 #include <urlmon.h>
 #include <commctrl.h>
 #include "resource.h"
@@ -22,15 +23,20 @@
 #include <string>
 #include <vector>
 
-#pragma comment(lib, "gdiplus.lib")
+#pragma comment(lib, "windowscodecs.lib")
+#pragma comment(lib, "dwmapi.lib")
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "urlmon.lib")
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "msimg32.lib")
 #pragma comment(linker,"\"/manifestdependency:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
 
-using namespace Gdiplus;
-
+#ifndef DWMWA_WINDOW_CORNER_PREFERENCE
+#define DWMWA_WINDOW_CORNER_PREFERENCE 33
+#endif
+#ifndef DWMWCP_ROUND
+#define DWMWCP_ROUND 2
+#endif
 enum class ActionType { None, Open, Command, Settings, Keys };
 
 struct Action {
@@ -60,17 +66,25 @@ struct AppConfig {
     std::map<int, std::wstring> pageNames;
     std::map<int, std::vector<ButtonConfig>> pages;
 };
+struct CachedIcon {
+    HBITMAP bitmap = nullptr;
+    HICON icon = nullptr;
+    void Clear() {
+        if (bitmap) { DeleteObject(bitmap); bitmap = nullptr; }
+        if (icon) { DestroyIcon(icon); icon = nullptr; }
+    }
+};
 
 struct AppState {
     HINSTANCE instance = nullptr;
     HWND hwnd = nullptr;
     HFONT uiFont = nullptr;
-    ULONG_PTR gdiplusToken = 0;
     AppConfig config;
     int currentPage = 0;
     std::wstring configPath;
     HWND tooltipHwnd = nullptr;
     int lastHoveredButton = -1;
+    std::vector<CachedIcon> currentIcons;
 };
 
 static AppState g;
@@ -516,6 +530,8 @@ static bool ConfirmAndClearButton(HWND owner, int index) {
     return true;
 }
 
+static void RefreshCurrentIcons();
+
 static void MovePage(bool next) {
     std::vector<int> pages = ExistingPages();
     if (pages.empty()) return;
@@ -529,6 +545,7 @@ static void MovePage(bool next) {
         g.currentPage = it == pages.begin() ? pages.back() : *(it - 1);
     }
     CurrentButtons();
+    RefreshCurrentIcons();
     InvalidateRect(g.hwnd, nullptr, TRUE);
 }
 
@@ -569,7 +586,8 @@ static void ResizeWindowToGrid() {
     const int height = HEADER_HEIGHT + g.config.gap + g.config.rows * (g.config.buttonSize + g.config.gap);
     SetWindowPos(g.hwnd, g.config.alwaysOnTop ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0,
         width, height, SWP_NOMOVE | SWP_NOACTIVATE);
-    SetWindowRgn(g.hwnd, CreateRoundRectRgn(0, 0, width + 1, height + 1, 18, 18), TRUE);
+    BOOL value = DWMWCP_ROUND;
+    DwmSetWindowAttribute(g.hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &value, sizeof(value));
     SetLayeredWindowAttributes(g.hwnd, 0, WINDOW_OPACITY, LWA_ALPHA);
     UpdateTooltipRects();
 }
@@ -614,105 +632,124 @@ static bool IsTextTruncated(HDC hdc, const std::wstring& text, RECT rc, int poin
 static bool IsWebUrl(const std::wstring& value);
 static std::wstring HostFromUrl(const std::wstring& url);
 
-static void ConfigureImageGraphics(Graphics& graphics) {
-    graphics.SetInterpolationMode(InterpolationModeHighQualityBicubic);
-    graphics.SetSmoothingMode(SmoothingModeAntiAlias);
-    graphics.SetPixelOffsetMode(PixelOffsetModeHalf);
-    graphics.SetCompositingQuality(CompositingQualityHighQuality);
-    graphics.SetCompositingMode(CompositingModeSourceOver);
+static IWICImagingFactory* GetWicFactory() {
+    static IWICImagingFactory* factory = nullptr;
+    if (!factory) {
+        CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory));
+    }
+    return factory;
 }
 
-static bool DrawCustomImage(HDC hdc, const std::wstring& path, RECT rc) {
-    if (path.rfind(L"favicon:", 0) == 0) return false;
-    if (path.empty() || !PathFileExistsW(path.c_str())) return false;
-    const wchar_t* ext = PathFindExtensionW(path.c_str());
-    if (_wcsicmp(ext, L".svg") == 0) return false;
-    Graphics graphics(hdc);
-    ConfigureImageGraphics(graphics);
-    Image image(path.c_str());
-    if (image.GetLastStatus() != Ok) return false;
-    int side = std::min(rc.right - rc.left, rc.bottom - rc.top) - 28;
-    if (side <= 8) return false;
-    Rect dest(rc.left + ((rc.right - rc.left) - side) / 2, rc.top + 10, side, side);
-    ImageAttributes attrs;
-    attrs.SetWrapMode(WrapModeTileFlipXY);
-    graphics.DrawImage(&image, dest, 0, 0, image.GetWidth(), image.GetHeight(), UnitPixel, &attrs);
-    return true;
-}
+static HBITMAP LoadBitmapWithWic(const std::wstring& path, int side) {
+    IWICImagingFactory* wic = GetWicFactory();
+    if (!wic) return nullptr;
 
-static bool DrawUrlFavicon(HDC hdc, const std::wstring& url, RECT rc) {
-    if (!IsWebUrl(url)) return false;
-    std::wstring host = HostFromUrl(url);
-    if (host.empty()) return false;
-    std::wstring faviconUrl = L"https://" + host + L"/favicon.ico";
-    wchar_t cachePath[MAX_PATH]{};
-    if (FAILED(URLDownloadToCacheFileW(nullptr, faviconUrl.c_str(), cachePath, MAX_PATH, 0, nullptr))) return false;
-    return DrawCustomImage(hdc, cachePath, rc);
-}
+    IWICBitmapDecoder* decoder = nullptr;
+    if (FAILED(wic->CreateDecoderFromFilename(path.c_str(), nullptr, GENERIC_READ, WICDecodeMetadataCacheOnDemand, &decoder))) return nullptr;
 
-static bool DrawShellItemImage(HDC hdc, const std::wstring& target, RECT rc) {
-    if (target.empty()) return false;
+    IWICBitmapFrameDecode* frame = nullptr;
+    HRESULT hr = decoder->GetFrame(0, &frame);
+    decoder->Release();
+    if (FAILED(hr)) return nullptr;
 
-    int side = std::min(rc.right - rc.left, rc.bottom - rc.top) - 32;
-    if (side < 24) side = 24;
+    IWICFormatConverter* converter = nullptr;
+    hr = wic->CreateFormatConverter(&converter);
+    if (SUCCEEDED(hr)) {
+        hr = converter->Initialize(frame, GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, nullptr, 0.0f, WICBitmapPaletteTypeCustom);
+    }
+    frame->Release();
+    if (FAILED(hr)) {
+        if (converter) converter->Release();
+        return nullptr;
+    }
 
-    IShellItemImageFactory* imageFactory = nullptr;
-    HRESULT hr = SHCreateItemFromParsingName(target.c_str(), nullptr, IID_PPV_ARGS(&imageFactory));
-    if (FAILED(hr) || !imageFactory) return false;
+    IWICBitmapScaler* scaler = nullptr;
+    hr = wic->CreateBitmapScaler(&scaler);
+    if (SUCCEEDED(hr)) {
+        hr = scaler->Initialize(converter, side, side, WICBitmapInterpolationModeFant);
+    }
+    converter->Release();
+    if (FAILED(hr)) {
+        if (scaler) scaler->Release();
+        return nullptr;
+    }
 
-    HBITMAP bitmap = nullptr;
-    SIZE size{ side, side };
-    hr = imageFactory->GetImage(size, SIIGBF_BIGGERSIZEOK | SIIGBF_ICONONLY, &bitmap);
-    imageFactory->Release();
-    if (FAILED(hr) || !bitmap) return false;
+    BITMAPINFO bminfo{};
+    bminfo.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bminfo.bmiHeader.biWidth = side;
+    bminfo.bmiHeader.biHeight = -side;
+    bminfo.bmiHeader.biPlanes = 1;
+    bminfo.bmiHeader.biBitCount = 32;
+    bminfo.bmiHeader.biCompression = BI_RGB;
 
-    BITMAP bm{};
-    GetObjectW(bitmap, sizeof(bm), &bm);
-    HDC memDc = CreateCompatibleDC(hdc);
-    HGDIOBJ oldBitmap = SelectObject(memDc, bitmap);
-    BLENDFUNCTION blend{};
-    blend.BlendOp = AC_SRC_OVER;
-    blend.SourceConstantAlpha = 255;
-    blend.AlphaFormat = AC_SRC_ALPHA;
-    const int x = rc.left + ((rc.right - rc.left) - side) / 2;
-    const int y = rc.top + 12;
-    BOOL ok = AlphaBlend(hdc, x, y, side, side, memDc, 0, 0, bm.bmWidth, bm.bmHeight, blend);
-    SelectObject(memDc, oldBitmap);
-    DeleteDC(memDc);
-    DeleteObject(bitmap);
-    return ok != FALSE;
-}
+    void* pixels = nullptr;
+    HDC hdc = GetDC(nullptr);
+    HBITMAP hBitmap = CreateDIBSection(hdc, &bminfo, DIB_RGB_COLORS, &pixels, nullptr, 0);
+    ReleaseDC(nullptr, hdc);
 
-static bool DrawShellIcon(HDC hdc, const std::wstring& target, RECT rc) {
-    if (target.empty()) return false;
-    if (DrawShellItemImage(hdc, target, rc)) return true;
-
-    SHFILEINFOW info{};
-    DWORD flags = SHGFI_ICON | SHGFI_LARGEICON;
-    bool success = false;
-    
-    if (target.rfind(L"shell:", 0) == 0) {
-        PIDLIST_ABSOLUTE pidl = nullptr;
-        if (SUCCEEDED(SHParseDisplayName(target.c_str(), nullptr, &pidl, 0, nullptr))) {
-            if (SHGetFileInfoW(reinterpret_cast<LPCWSTR>(pidl), 0, &info, sizeof(info), flags | SHGFI_PIDL)) {
-                success = true;
-            }
-            CoTaskMemFree(pidl);
-        }
+    if (hBitmap && pixels) {
+        scaler->CopyPixels(nullptr, side * 4, side * side * 4, static_cast<BYTE*>(pixels));
     } else {
-        if (!PathFileExistsW(target.c_str())) flags |= SHGFI_USEFILEATTRIBUTES;
-        if (SHGetFileInfoW(target.c_str(), FILE_ATTRIBUTE_NORMAL, &info, sizeof(info), flags)) {
-            success = true;
+        if (hBitmap) DeleteObject(hBitmap);
+        hBitmap = nullptr;
+    }
+    scaler->Release();
+
+    return hBitmap;
+}
+
+static void RefreshCurrentIcons() {
+    auto& buttons = CurrentButtons();
+    g.currentIcons.resize(buttons.size());
+    for (size_t i = 0; i < buttons.size(); ++i) {
+        g.currentIcons[i].Clear();
+        const ButtonConfig& b = buttons[i];
+        
+        RECT r = ButtonRect(static_cast<int>(i));
+        int side = std::min(r.right - r.left, r.bottom - r.top) - 28;
+        if (side < 24) side = 24;
+
+        if (b.action.type == ActionType::Settings || b.action.type == ActionType::Keys) continue;
+
+        bool loaded = false;
+        if (!b.imagePath.empty() && PathFileExistsW(b.imagePath.c_str()) && _wcsicmp(PathFindExtensionW(b.imagePath.c_str()), L".svg") != 0) {
+            g.currentIcons[i].bitmap = LoadBitmapWithWic(b.imagePath, side);
+            loaded = g.currentIcons[i].bitmap != nullptr;
+        }
+        
+        if (!loaded && IsWebUrl(b.action.target)) {
+            std::wstring host = HostFromUrl(b.action.target);
+            if (!host.empty()) {
+                std::wstring faviconUrl = L"https://" + host + L"/favicon.ico";
+                wchar_t cachePath[MAX_PATH]{};
+                if (SUCCEEDED(URLDownloadToCacheFileW(nullptr, faviconUrl.c_str(), cachePath, MAX_PATH, 0, nullptr))) {
+                    g.currentIcons[i].bitmap = LoadBitmapWithWic(cachePath, side);
+                    loaded = g.currentIcons[i].bitmap != nullptr;
+                }
+            }
+        }
+        
+        if (!loaded && (b.action.type == ActionType::Open || b.action.type == ActionType::Command) && !b.action.target.empty()) {
+            SHFILEINFOW info{};
+            DWORD flags = SHGFI_ICON | SHGFI_LARGEICON;
+            if (b.action.target.rfind(L"shell:", 0) == 0) {
+                PIDLIST_ABSOLUTE pidl = nullptr;
+                if (SUCCEEDED(SHParseDisplayName(b.action.target.c_str(), nullptr, &pidl, 0, nullptr))) {
+                    if (SHGetFileInfoW(reinterpret_cast<LPCWSTR>(pidl), 0, &info, sizeof(info), flags | SHGFI_PIDL)) {
+                        g.currentIcons[i].icon = info.hIcon;
+                        loaded = true;
+                    }
+                    CoTaskMemFree(pidl);
+                }
+            } else {
+                if (!PathFileExistsW(b.action.target.c_str())) flags |= SHGFI_USEFILEATTRIBUTES;
+                if (SHGetFileInfoW(b.action.target.c_str(), FILE_ATTRIBUTE_NORMAL, &info, sizeof(info), flags)) {
+                    g.currentIcons[i].icon = info.hIcon;
+                    loaded = true;
+                }
+            }
         }
     }
-    
-    if (!success) return false;
-    
-    int side = std::min(rc.right - rc.left, rc.bottom - rc.top) - 32;
-    if (side < 24) side = 24;
-    DrawIconEx(hdc, rc.left + ((rc.right - rc.left) - side) / 2, rc.top + 12, info.hIcon, side, side, 0, nullptr, DI_NORMAL);
-    DestroyIcon(info.hIcon);
-    return true;
 }
 
 static bool DrawSystemKeyIcon(HDC hdc, const Action& action, RECT rc) {
@@ -977,9 +1014,6 @@ static void DrawHeaderControl(HDC hdc, RECT rc) {
 }
 
 static void DrawSettingsIcon(HDC hdc, RECT rc) {
-    Graphics graphics(hdc);
-    graphics.SetSmoothingMode(SmoothingModeAntiAlias);
-
     const float cx = (rc.left + rc.right) / 2.0f;
     const float cy = (rc.top + rc.bottom) / 2.0f;
     const float size = static_cast<float>(std::min(rc.right - rc.left, rc.bottom - rc.top));
@@ -988,7 +1022,7 @@ static void DrawSettingsIcon(HDC hdc, RECT rc) {
     const float holeRadius = size * 0.10f;
 
     const int numTeeth = 8;
-    PointF pts[32];
+    POINT pts[32];
     for (int i = 0; i < numTeeth; ++i) {
         double aCenter = i * 45.0;
         double a1 = (aCenter - 12.0) * 3.14159265358979323846 / 180.0;
@@ -996,19 +1030,38 @@ static void DrawSettingsIcon(HDC hdc, RECT rc) {
         double a3 = (aCenter + 7.0) * 3.14159265358979323846 / 180.0;
         double a4 = (aCenter + 12.0) * 3.14159265358979323846 / 180.0;
 
-        pts[i * 4 + 0] = PointF(static_cast<float>(cx + bodyRadius * cos(a1)), static_cast<float>(cy + bodyRadius * sin(a1)));
-        pts[i * 4 + 1] = PointF(static_cast<float>(cx + tipRadius * cos(a2)), static_cast<float>(cy + tipRadius * sin(a2)));
-        pts[i * 4 + 2] = PointF(static_cast<float>(cx + tipRadius * cos(a3)), static_cast<float>(cy + tipRadius * sin(a3)));
-        pts[i * 4 + 3] = PointF(static_cast<float>(cx + bodyRadius * cos(a4)), static_cast<float>(cy + bodyRadius * sin(a4)));
+        pts[i * 4 + 0] = { static_cast<LONG>(cx + bodyRadius * cos(a1)), static_cast<LONG>(cy + bodyRadius * sin(a1)) };
+        pts[i * 4 + 1] = { static_cast<LONG>(cx + tipRadius * cos(a2)), static_cast<LONG>(cy + tipRadius * sin(a2)) };
+        pts[i * 4 + 2] = { static_cast<LONG>(cx + tipRadius * cos(a3)), static_cast<LONG>(cy + tipRadius * sin(a3)) };
+        pts[i * 4 + 3] = { static_cast<LONG>(cx + bodyRadius * cos(a4)), static_cast<LONG>(cy + bodyRadius * sin(a4)) };
     }
 
-    GraphicsPath path;
-    path.SetFillMode(FillModeAlternate);
-    path.AddPolygon(pts, 32);
-    path.AddEllipse(cx - holeRadius, cy - holeRadius, holeRadius * 2.0f, holeRadius * 2.0f);
+    int oldMode = SetPolyFillMode(hdc, ALTERNATE);
+    HBRUSH gearBrush = CreateSolidBrush(RGB(245, 247, 250));
+    HPEN nullPen = static_cast<HPEN>(GetStockObject(NULL_PEN));
+    HGDIOBJ oldBrush = SelectObject(hdc, gearBrush);
+    HGDIOBJ oldPen = SelectObject(hdc, nullPen);
 
-    SolidBrush brush(Color(255, 245, 247, 250));
-    graphics.FillPath(&brush, &path);
+    BeginPath(hdc);
+    Polygon(hdc, pts, 32);
+    int hr = static_cast<int>(holeRadius);
+    Ellipse(hdc, static_cast<int>(cx) - hr, static_cast<int>(cy) - hr, static_cast<int>(cx) + hr, static_cast<int>(cy) + hr);
+    EndPath(hdc);
+
+    HBRUSH bgBrush = CreateSolidBrush(RGB(37, 43, 52));
+    SelectObject(hdc, gearBrush);
+    SetBkMode(hdc, TRANSPARENT);
+    FillPath(hdc);
+
+    // Draw the center hole with the background color
+    SelectObject(hdc, bgBrush);
+    Ellipse(hdc, static_cast<int>(cx) - hr, static_cast<int>(cy) - hr, static_cast<int>(cx) + hr, static_cast<int>(cy) + hr);
+
+    SelectObject(hdc, oldBrush);
+    SelectObject(hdc, oldPen);
+    SetPolyFillMode(hdc, oldMode);
+    DeleteObject(gearBrush);
+    DeleteObject(bgBrush);
 }
 
 static void Paint(HDC hdc) {
@@ -1058,13 +1111,37 @@ static void Paint(HDC hdc) {
         const ButtonConfig& b = buttons[i];
         RECT iconRect = r;
         iconRect.bottom -= 20;
-        bool drew = DrawCustomImage(hdc, b.imagePath, r);
-        if (!drew && IsWebUrl(b.action.target)) {
-            drew = DrawUrlFavicon(hdc, b.action.target, r);
+        bool drew = false;
+
+        if (g.currentIcons.size() > static_cast<size_t>(i)) {
+            const CachedIcon& cached = g.currentIcons[i];
+            if (cached.bitmap) {
+                HDC memDc = CreateCompatibleDC(hdc);
+                HGDIOBJ oldBitmap = SelectObject(memDc, cached.bitmap);
+                BLENDFUNCTION blend{};
+                blend.BlendOp = AC_SRC_OVER;
+                blend.SourceConstantAlpha = 255;
+                blend.AlphaFormat = AC_SRC_ALPHA;
+                
+                int side = std::min(r.right - r.left, r.bottom - r.top) - 28;
+                if (side < 24) side = 24;
+                int x = r.left + ((r.right - r.left) - side) / 2;
+                int y = r.top + 10;
+                
+                AlphaBlend(hdc, x, y, side, side, memDc, 0, 0, side, side, blend);
+                SelectObject(memDc, oldBitmap);
+                DeleteDC(memDc);
+                drew = true;
+            } else if (cached.icon) {
+                int side = std::min(r.right - r.left, r.bottom - r.top) - 32;
+                if (side < 24) side = 24;
+                int x = r.left + ((r.right - r.left) - side) / 2;
+                int y = r.top + 12;
+                DrawIconEx(hdc, x, y, cached.icon, side, side, 0, nullptr, DI_NORMAL);
+                drew = true;
+            }
         }
-        if (!drew && (b.action.type == ActionType::Open || b.action.type == ActionType::Command)) {
-            drew = DrawShellIcon(hdc, b.action.target, r);
-        }
+
         if (!drew && b.action.type == ActionType::Keys) {
             drew = DrawSystemKeyIcon(hdc, b.action, r);
             if (!drew) drew = DrawKeySpecIcon(hdc, b.action, r);
@@ -2428,6 +2505,7 @@ static void EditButton(int index) {
             buttons[index] = ButtonConfig{};
         }
         SaveConfig();
+        RefreshCurrentIcons();
         InvalidateRect(g.hwnd, nullptr, TRUE);
     }
 }
@@ -2556,6 +2634,7 @@ static void ShowSettingsDialog() {
         SaveConfig();
         ResizeWindowToGrid();
         ApplyTrayIconSetting();
+        RefreshCurrentIcons();
         InvalidateRect(g.hwnd, nullptr, TRUE);
     }
 }
@@ -2776,6 +2855,7 @@ static void ShowPageSettingsDialog() {
     RunOwnedModal(dialog);
     if (ctx.accepted) {
         SaveConfig();
+        RefreshCurrentIcons();
         InvalidateRect(g.hwnd, nullptr, TRUE);
     }
 }
@@ -2928,9 +3008,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_COMMAND: {
         int id = LOWORD(wp);
         if (id >= IDM_EDIT_BASE && id < IDM_EDIT_BASE + 256) EditButton(id - IDM_EDIT_BASE);
-        else if (id >= IDM_CLEAR_BASE && id < IDM_CLEAR_BASE + 256) {
+        if (id >= IDM_CLEAR_BASE && id < IDM_CLEAR_BASE + 256) {
             if (ConfirmAndClearButton(hwnd, id - IDM_CLEAR_BASE)) {
                 SaveConfig();
+                RefreshCurrentIcons();
                 InvalidateRect(hwnd, nullptr, TRUE);
             }
         }
@@ -2941,11 +3022,13 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         else if (id == IDM_ADD_PAGE) {
             AddPage();
             SaveConfig();
+            RefreshCurrentIcons();
             InvalidateRect(hwnd, nullptr, TRUE);
         }
         else if (id == IDM_DELETE_PAGE) {
             if (ConfirmAndDeleteCurrentPage(hwnd)) {
                 SaveConfig();
+                RefreshCurrentIcons();
                 InvalidateRect(hwnd, nullptr, TRUE);
             }
         }
@@ -2976,8 +3059,6 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int show) {
     HRESULT comInit = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     g.instance = instance;
     InitUiFont();
-    GdiplusStartupInput gdiplusInput;
-    GdiplusStartup(&g.gdiplusToken, &gdiplusInput, nullptr);
     LoadConfig();
 
     WNDCLASSW wc{};
@@ -2997,6 +3078,8 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int show) {
         nullptr, nullptr, instance, nullptr);
 
     if (!g.hwnd) return 1;
+    ResizeWindowToGrid();
+    RefreshCurrentIcons();
     ShowWindow(g.hwnd, show);
     UpdateWindow(g.hwnd);
 
@@ -3005,8 +3088,9 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int show) {
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
+    for (auto& ic : g.currentIcons) ic.Clear();
+    g.currentIcons.clear();
     if (g.uiFont) DeleteObject(g.uiFont);
-    GdiplusShutdown(g.gdiplusToken);
     if (SUCCEEDED(comInit)) CoUninitialize();
     return static_cast<int>(msg.wParam);
 }
