@@ -86,6 +86,7 @@ struct AppState {
     HWND tooltipHwnd = nullptr;
     int lastHoveredButton = -1;
     std::vector<CachedIcon> currentIcons;
+    bool altTabActive = false;
 };
 
 static AppState g;
@@ -177,7 +178,10 @@ static constexpr int IDC_KEY_SHIFT = 3205;
 static constexpr int IDC_KEY_WIN = 3206;
 static constexpr int IDC_KEY_CLEAR = 3207;
 static constexpr int IDC_KEY_LAYOUT = 3208;
+static constexpr int IDC_KEY_ALTTAB_NEXT = 3209;
+static constexpr int IDC_KEY_ALTTAB_PREV = 3210;
 static constexpr int IDC_KEY_BUTTON_BASE = 6000;
+static constexpr UINT_PTR IDT_ALT_TAB_RELEASE = 4101;
 
 static std::wstring Utf8ToWide(const std::string& value) {
     if (value.empty()) return L"";
@@ -874,6 +878,8 @@ static bool DrawSystemKeyIcon(HDC hdc, const Action& action, RECT rc) {
 
 static std::wstring CompactKeySpec(std::wstring spec) {
     spec = Trim(spec);
+    if (spec == L"ALT_TAB_NEXT") return L"Alt+Tab";
+    if (spec == L"ALT_TAB_PREV") return L"Alt+Shift+Tab";
     if (spec.rfind(L"SEQ:", 0) == 0) return L"SEQ";
 
     std::wstring compact;
@@ -899,6 +905,8 @@ static std::wstring CompactKeySpec(std::wstring spec) {
 static std::wstring KeyBadgeFromSpec(const std::wstring& spec) {
     std::wstring compact = CompactKeySpec(spec);
     if (compact == L"SEQ") return L"SEQ";
+    if (compact == L"Alt+Tab") return L"TAB";
+    if (compact == L"Alt+Shift+Tab") return L"TAB";
 
     size_t pos = compact.find_last_of(L'+');
     std::wstring badge = pos == std::wstring::npos ? compact : compact.substr(pos + 1);
@@ -1266,8 +1274,39 @@ static void SendKeyChord(const std::wstring& spec) {
     if (!inputs.empty()) SendInput(static_cast<UINT>(inputs.size()), inputs.data(), sizeof(INPUT));
 }
 
+static void SendVirtualKey(WORD vk, bool keyUp = false) {
+    INPUT in{};
+    in.type = INPUT_KEYBOARD;
+    in.ki.wVk = vk;
+    if (keyUp) in.ki.dwFlags = KEYEVENTF_KEYUP;
+    SendInput(1, &in, sizeof(INPUT));
+}
+
+static void ReleaseAltTabHold() {
+    if (!g.altTabActive) return;
+    KillTimer(g.hwnd, IDT_ALT_TAB_RELEASE);
+    SendVirtualKey(VK_MENU, true);
+    g.altTabActive = false;
+}
+
+static void SendAltTabSwitch(bool reverse) {
+    if (!g.altTabActive) {
+        SendVirtualKey(VK_MENU);
+        g.altTabActive = true;
+    }
+    if (reverse) SendVirtualKey(VK_SHIFT);
+    SendVirtualKey(VK_TAB);
+    SendVirtualKey(VK_TAB, true);
+    if (reverse) SendVirtualKey(VK_SHIFT, true);
+    if (g.hwnd) SetTimer(g.hwnd, IDT_ALT_TAB_RELEASE, 1200, nullptr);
+}
+
 static void SendKeySpec(const std::wstring& spec) {
     std::wstring trimmed = Trim(spec);
+    if (trimmed == L"ALT_TAB_NEXT" || trimmed == L"ALT_TAB_PREV") {
+        SendAltTabSwitch(trimmed == L"ALT_TAB_PREV");
+        return;
+    }
     if (trimmed == L"VOLUME_UP_FAST" || trimmed == L"VOLUME_DOWN_FAST") {
         const std::wstring chord = trimmed == L"VOLUME_UP_FAST" ? L"VOLUME_UP" : L"VOLUME_DOWN";
         for (int i = 0; i < 5; ++i) {
@@ -2303,6 +2342,8 @@ static LRESULT CALLBACK KeyPickerProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         AddCheckWithReadableLabel(hwnd, IDC_KEY_WIN, L"Win", 732, 18, 42);
         AddEdit(hwnd, IDC_KEY_SPEC, ctx->spec, 24, 62, 760, 34);
         AddButton(hwnd, IDC_KEY_CLEAR, L"クリア", 800, 62, 92, 34);
+        AddButton(hwnd, IDC_KEY_ALTTAB_NEXT, L"Alt+Tab切替", 908, 62, 132, 34);
+        AddButton(hwnd, IDC_KEY_ALTTAB_PREV, L"Alt+Shift+Tab切替", 1052, 62, 172, 34);
 
         for (int i = 0; i < static_cast<int>(sizeof(kKeyChoices) / sizeof(kKeyChoices[0])); ++i) {
             const int unit = 46;
@@ -2326,6 +2367,10 @@ static LRESULT CALLBACK KeyPickerProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         }
         if (id == IDC_KEY_CLEAR) {
             SetWindowTextW(GetDlgItem(hwnd, IDC_KEY_SPEC), L"");
+            return 0;
+        }
+        if (id == IDC_KEY_ALTTAB_NEXT || id == IDC_KEY_ALTTAB_PREV) {
+            SetWindowTextW(GetDlgItem(hwnd, IDC_KEY_SPEC), id == IDC_KEY_ALTTAB_NEXT ? L"ALT_TAB_NEXT" : L"ALT_TAB_PREV");
             return 0;
         }
         if (id == IDC_KEY_LAYOUT && HIWORD(wp) == CBN_SELCHANGE && ctx) {
@@ -2936,6 +2981,12 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return DefWindowProcW(hwnd, msg, wp, lp);
     case WM_MOUSEACTIVATE:
         return MA_NOACTIVATE;
+    case WM_TIMER:
+        if (wp == IDT_ALT_TAB_RELEASE) {
+            ReleaseAltTabHold();
+            return 0;
+        }
+        return DefWindowProcW(hwnd, msg, wp, lp);
     case WM_PAINT: {
         PAINTSTRUCT ps{};
         HDC hdc = BeginPaint(hwnd, &ps);
@@ -3075,6 +3126,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         DestroyWindow(hwnd);
         return 0;
     case WM_DESTROY:
+        ReleaseAltTabHold();
         RememberWindowPosition();
         UpdateTrayIcon(false);
         SaveConfig();
