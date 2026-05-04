@@ -26,6 +26,7 @@
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "urlmon.lib")
 #pragma comment(lib, "comctl32.lib")
+#pragma comment(lib, "msimg32.lib")
 #pragma comment(linker,"\"/manifestdependency:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
 
 using namespace Gdiplus;
@@ -665,13 +666,21 @@ static bool DrawShellItemImage(HDC hdc, const std::wstring& target, RECT rc) {
     imageFactory->Release();
     if (FAILED(hr) || !bitmap) return false;
 
-    Graphics graphics(hdc);
-    ConfigureImageGraphics(graphics);
-    Bitmap gdipBitmap(bitmap, nullptr);
-    Rect dest(rc.left + ((rc.right - rc.left) - side) / 2, rc.top + 12, side, side);
-    Status status = graphics.DrawImage(&gdipBitmap, dest);
+    BITMAP bm{};
+    GetObjectW(bitmap, sizeof(bm), &bm);
+    HDC memDc = CreateCompatibleDC(hdc);
+    HGDIOBJ oldBitmap = SelectObject(memDc, bitmap);
+    BLENDFUNCTION blend{};
+    blend.BlendOp = AC_SRC_OVER;
+    blend.SourceConstantAlpha = 255;
+    blend.AlphaFormat = AC_SRC_ALPHA;
+    const int x = rc.left + ((rc.right - rc.left) - side) / 2;
+    const int y = rc.top + 12;
+    BOOL ok = AlphaBlend(hdc, x, y, side, side, memDc, 0, 0, bm.bmWidth, bm.bmHeight, blend);
+    SelectObject(memDc, oldBitmap);
+    DeleteDC(memDc);
     DeleteObject(bitmap);
-    return status == Ok;
+    return ok != FALSE;
 }
 
 static bool DrawShellIcon(HDC hdc, const std::wstring& target, RECT rc) {
