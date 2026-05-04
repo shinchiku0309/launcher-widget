@@ -732,8 +732,8 @@ static bool DrawSystemKeyIcon(HDC hdc, const Action& action, RECT rc) {
         } else {
             const int markY = midY;
             const int markHalf = std::max(5, side / 10);
-            const int firstX = left + side * 2 / 3;
-            const int secondX = left + side * 5 / 6;
+            const int firstX = left + side * 13 / 20;
+            const int secondX = left + side * 9 / 10;
             const int count = volumeUpFast || volumeDownFast ? 2 : 1;
             for (int i = 0; i < count; ++i) {
                 const int markX = count == 1 ? left + side * 3 / 4 : (i == 0 ? firstX : secondX);
