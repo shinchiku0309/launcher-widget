@@ -10,6 +10,7 @@
 #include <commdlg.h>
 #include <wincodec.h>
 #include <dwmapi.h>
+#include <gdiplus.h>
 #include <urlmon.h>
 #include <commctrl.h>
 #include "resource.h"
@@ -29,6 +30,7 @@
 #pragma comment(lib, "urlmon.lib")
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "msimg32.lib")
+#pragma comment(lib, "gdiplus.lib")
 #pragma comment(linker,"\"/manifestdependency:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
 
 #ifndef DWMWA_WINDOW_CORNER_PREFERENCE
@@ -90,6 +92,7 @@ struct AppState {
     bool pendingAltTabSwitch = false;
     bool pendingAltTabReverse = false;
     HHOOK altTabMouseHook = nullptr;
+    ULONG_PTR gdiplusToken = 0;
 };
 
 static AppState g;
@@ -132,7 +135,7 @@ static constexpr UINT WM_ALT_TAB_HOOK_CLICK = WM_APP + 2;
 
 static constexpr int HEADER_HEIGHT = 40;
 static constexpr int HEADER_PAGE_BUTTON_SIZE = 30;
-static constexpr int HEADER_WINDOW_BUTTON_SIZE = 24;
+static constexpr int HEADER_WINDOW_BUTTON_SIZE = 26;
 static constexpr int HEADER_BUTTON_GAP = 6;
 static constexpr BYTE WINDOW_OPACITY = 232;
 static constexpr COLORREF DIALOG_BG = RGB(30, 34, 40);
@@ -1037,89 +1040,104 @@ static RECT RectInset(RECT rc, int inset) {
     return rc;
 }
 
+static Gdiplus::Color GdiPlusColor(COLORREF color, BYTE alpha = 255) {
+    return Gdiplus::Color(alpha, GetRValue(color), GetGValue(color), GetBValue(color));
+}
+
+static Gdiplus::RectF RectFFromRect(RECT rc) {
+    return Gdiplus::RectF(
+        static_cast<Gdiplus::REAL>(rc.left),
+        static_cast<Gdiplus::REAL>(rc.top),
+        static_cast<Gdiplus::REAL>(rc.right - rc.left),
+        static_cast<Gdiplus::REAL>(rc.bottom - rc.top));
+}
+
 static void DrawHeaderControl(HDC hdc, RECT rc, COLORREF fill) {
     RECT circle = RectInset(rc, 3);
-    HBRUSH brush = CreateSolidBrush(fill);
-    HPEN pen = static_cast<HPEN>(GetStockObject(NULL_PEN));
-    HGDIOBJ oldBrush = SelectObject(hdc, brush);
-    HGDIOBJ oldPen = SelectObject(hdc, pen);
-    Ellipse(hdc, circle.left, circle.top, circle.right, circle.bottom);
-    SelectObject(hdc, oldBrush);
-    SelectObject(hdc, oldPen);
-    DeleteObject(brush);
+    Gdiplus::Graphics graphics(hdc);
+    graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    graphics.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHighQuality);
+
+    Gdiplus::SolidBrush shadow(Gdiplus::Color(70, 0, 0, 0));
+    Gdiplus::RectF shadowRect = RectFFromRect(circle);
+    shadowRect.Y += 1.0f;
+    graphics.FillEllipse(&shadow, shadowRect);
+
+    Gdiplus::SolidBrush brush(GdiPlusColor(fill));
+    graphics.FillEllipse(&brush, RectFFromRect(circle));
 }
 
 static void DrawSettingsIcon(HDC hdc, RECT rc, COLORREF bgColor = RGB(37, 43, 52)) {
-    const float cx = (rc.left + rc.right) / 2.0f;
-    const float cy = (rc.top + rc.bottom) / 2.0f;
-    const float size = static_cast<float>(std::min(rc.right - rc.left, rc.bottom - rc.top));
-    const float bodyRadius = size * 0.23f;
-    const float tipRadius = size * 0.32f;
-    const float holeRadius = size * 0.10f;
+    Gdiplus::Graphics graphics(hdc);
+    graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    graphics.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHighQuality);
+
+    const Gdiplus::REAL cx = (rc.left + rc.right) / 2.0f;
+    const Gdiplus::REAL cy = (rc.top + rc.bottom) / 2.0f;
+    const Gdiplus::REAL size = static_cast<Gdiplus::REAL>(std::min(rc.right - rc.left, rc.bottom - rc.top));
+    const Gdiplus::REAL innerRadius = size * 0.22f;
+    const Gdiplus::REAL rootRadius = size * 0.30f;
+    const Gdiplus::REAL tipRadius = size * 0.42f;
+    const Gdiplus::REAL holeRadius = size * 0.13f;
 
     const int numTeeth = 8;
-    POINT pts[32];
+    Gdiplus::GraphicsPath gearPath(Gdiplus::FillModeAlternate);
     for (int i = 0; i < numTeeth; ++i) {
         double aCenter = i * 45.0;
-        double a1 = (aCenter - 12.0) * 3.14159265358979323846 / 180.0;
-        double a2 = (aCenter - 7.0) * 3.14159265358979323846 / 180.0;
-        double a3 = (aCenter + 7.0) * 3.14159265358979323846 / 180.0;
-        double a4 = (aCenter + 12.0) * 3.14159265358979323846 / 180.0;
-
-        pts[i * 4 + 0] = { static_cast<LONG>(cx + bodyRadius * cos(a1)), static_cast<LONG>(cy + bodyRadius * sin(a1)) };
-        pts[i * 4 + 1] = { static_cast<LONG>(cx + tipRadius * cos(a2)), static_cast<LONG>(cy + tipRadius * sin(a2)) };
-        pts[i * 4 + 2] = { static_cast<LONG>(cx + tipRadius * cos(a3)), static_cast<LONG>(cy + tipRadius * sin(a3)) };
-        pts[i * 4 + 3] = { static_cast<LONG>(cx + bodyRadius * cos(a4)), static_cast<LONG>(cy + bodyRadius * sin(a4)) };
+        const double angles[] = { aCenter - 18.0, aCenter - 9.0, aCenter + 9.0, aCenter + 18.0 };
+        const Gdiplus::REAL radii[] = { rootRadius, tipRadius, tipRadius, rootRadius };
+        for (int j = 0; j < 4; ++j) {
+            double angle = angles[j] * 3.14159265358979323846 / 180.0;
+            Gdiplus::PointF point(
+                cx + radii[j] * static_cast<Gdiplus::REAL>(cos(angle)),
+                cy + radii[j] * static_cast<Gdiplus::REAL>(sin(angle)));
+            if (i == 0 && j == 0) {
+                gearPath.StartFigure();
+                gearPath.AddLine(point, point);
+            } else {
+                Gdiplus::PointF lastPoint;
+                gearPath.GetLastPoint(&lastPoint);
+                gearPath.AddLine(lastPoint, point);
+            }
+        }
     }
+    gearPath.CloseFigure();
+    gearPath.AddEllipse(cx - innerRadius, cy - innerRadius, innerRadius * 2.0f, innerRadius * 2.0f);
 
-    int oldMode = SetPolyFillMode(hdc, ALTERNATE);
-    HBRUSH gearBrush = CreateSolidBrush(RGB(245, 247, 250));
-    HPEN nullPen = static_cast<HPEN>(GetStockObject(NULL_PEN));
-    HGDIOBJ oldBrush = SelectObject(hdc, gearBrush);
-    HGDIOBJ oldPen = SelectObject(hdc, nullPen);
+    Gdiplus::SolidBrush gearBrush(Gdiplus::Color(248, 250, 252));
+    graphics.FillPath(&gearBrush, &gearPath);
 
-    BeginPath(hdc);
-    Polygon(hdc, pts, 32);
-    int hr = static_cast<int>(holeRadius);
-    Ellipse(hdc, static_cast<int>(cx) - hr, static_cast<int>(cy) - hr, static_cast<int>(cx) + hr, static_cast<int>(cy) + hr);
-    EndPath(hdc);
-
-    HBRUSH bgBrush = CreateSolidBrush(bgColor);
-    SelectObject(hdc, gearBrush);
-    SetBkMode(hdc, TRANSPARENT);
-    FillPath(hdc);
-
-    // Draw the center hole with the background color
-    SelectObject(hdc, bgBrush);
-    Ellipse(hdc, static_cast<int>(cx) - hr, static_cast<int>(cy) - hr, static_cast<int>(cx) + hr, static_cast<int>(cy) + hr);
-
-    SelectObject(hdc, oldBrush);
-    SelectObject(hdc, oldPen);
-    SetPolyFillMode(hdc, oldMode);
-    DeleteObject(gearBrush);
-    DeleteObject(bgBrush);
+    Gdiplus::SolidBrush bgBrush(GdiPlusColor(bgColor));
+    graphics.FillEllipse(&bgBrush, cx - holeRadius, cy - holeRadius, holeRadius * 2.0f, holeRadius * 2.0f);
 }
 
 static void DrawHeaderMinusIcon(HDC hdc, RECT rc) {
-    HPEN pen = CreatePen(PS_SOLID, 2, RGB(92, 63, 20));
-    HGDIOBJ oldPen = SelectObject(hdc, pen);
-    const int cy = (rc.top + rc.bottom) / 2;
-    MoveToEx(hdc, rc.left + 8, cy, nullptr);
-    LineTo(hdc, rc.right - 8, cy);
-    SelectObject(hdc, oldPen);
-    DeleteObject(pen);
+    Gdiplus::Graphics graphics(hdc);
+    graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    graphics.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHighQuality);
+
+    const Gdiplus::REAL cx = (rc.left + rc.right) / 2.0f;
+    const Gdiplus::REAL cy = (rc.top + rc.bottom) / 2.0f;
+    const Gdiplus::REAL length = (rc.right - rc.left) * 0.34f;
+    Gdiplus::Pen pen(Gdiplus::Color(108, 71, 16), 2.0f);
+    pen.SetStartCap(Gdiplus::LineCapRound);
+    pen.SetEndCap(Gdiplus::LineCapRound);
+    graphics.DrawLine(&pen, cx - length / 2.0f, cy, cx + length / 2.0f, cy);
 }
 
 static void DrawHeaderCloseIcon(HDC hdc, RECT rc) {
-    HPEN pen = CreatePen(PS_SOLID, 2, RGB(98, 25, 25));
-    HGDIOBJ oldPen = SelectObject(hdc, pen);
-    RECT mark = RectInset(rc, 8);
-    MoveToEx(hdc, mark.left, mark.top, nullptr);
-    LineTo(hdc, mark.right, mark.bottom);
-    MoveToEx(hdc, mark.right, mark.top, nullptr);
-    LineTo(hdc, mark.left, mark.bottom);
-    SelectObject(hdc, oldPen);
-    DeleteObject(pen);
+    Gdiplus::Graphics graphics(hdc);
+    graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    graphics.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHighQuality);
+
+    const Gdiplus::REAL cx = (rc.left + rc.right) / 2.0f;
+    const Gdiplus::REAL cy = (rc.top + rc.bottom) / 2.0f;
+    const Gdiplus::REAL half = (rc.right - rc.left) * 0.17f;
+    Gdiplus::Pen pen(Gdiplus::Color(118, 28, 24), 2.0f);
+    pen.SetStartCap(Gdiplus::LineCapRound);
+    pen.SetEndCap(Gdiplus::LineCapRound);
+    graphics.DrawLine(&pen, cx - half, cy - half, cx + half, cy + half);
+    graphics.DrawLine(&pen, cx + half, cy - half, cx - half, cy + half);
 }
 
 static void Paint(HDC hdc) {
@@ -3253,6 +3271,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int show) {
     EnableDpiAwareness();
     HRESULT comInit = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    Gdiplus::GdiplusStartupInput gdiplusInput{};
+    Gdiplus::GdiplusStartup(&g.gdiplusToken, &gdiplusInput, nullptr);
     g.instance = instance;
     InitUiFont();
     LoadConfig();
@@ -3288,6 +3308,7 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int show) {
     g.currentIcons.clear();
     if (g.keyFont) DeleteObject(g.keyFont);
     if (g.uiFont) DeleteObject(g.uiFont);
+    if (g.gdiplusToken) Gdiplus::GdiplusShutdown(g.gdiplusToken);
     if (SUCCEEDED(comInit)) CoUninitialize();
     return static_cast<int>(msg.wParam);
 }
