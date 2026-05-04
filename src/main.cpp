@@ -1225,8 +1225,50 @@ static const ScreenPreset* FindScreenPresetByTarget(const std::wstring& target) 
     return nullptr;
 }
 
-static bool DrawScreenControlIcon(HDC hdc, const Action& action, RECT rc) {
-    const ScreenPreset* preset = FindScreenPreset(action);
+static const ScreenPreset* FindScreenPresetForButton(const ButtonConfig& button) {
+    for (const auto& preset : kScreenPresets) {
+        if (preset.type == button.action.type &&
+            _wcsicmp(button.action.target.c_str(), preset.target) == 0 &&
+            (_wcsicmp(button.text.c_str(), preset.badge) == 0 || _wcsicmp(button.title.c_str(), preset.title) == 0)) {
+            return &preset;
+        }
+    }
+    return FindScreenPreset(button.action);
+}
+
+static void DrawMiniGear(Gdiplus::Graphics& graphics, Gdiplus::REAL cx, Gdiplus::REAL cy, Gdiplus::REAL radius, const Gdiplus::Color& color, const Gdiplus::Color& holeColor) {
+    Gdiplus::GraphicsPath gearPath(Gdiplus::FillModeAlternate);
+    const Gdiplus::REAL rootRadius = radius * 0.68f;
+    const Gdiplus::REAL tipRadius = radius;
+    for (int i = 0; i < 8; ++i) {
+        const double center = i * 45.0;
+        const double angles[] = { center - 16.0, center - 8.0, center + 8.0, center + 16.0 };
+        const Gdiplus::REAL radii[] = { rootRadius, tipRadius, tipRadius, rootRadius };
+        for (int j = 0; j < 4; ++j) {
+            const double angle = angles[j] * 3.14159265358979323846 / 180.0;
+            Gdiplus::PointF point(
+                cx + radii[j] * static_cast<Gdiplus::REAL>(cos(angle)),
+                cy + radii[j] * static_cast<Gdiplus::REAL>(sin(angle)));
+            if (i == 0 && j == 0) {
+                gearPath.StartFigure();
+                gearPath.AddLine(point, point);
+            } else {
+                Gdiplus::PointF lastPoint;
+                gearPath.GetLastPoint(&lastPoint);
+                gearPath.AddLine(lastPoint, point);
+            }
+        }
+    }
+    gearPath.CloseFigure();
+    Gdiplus::SolidBrush gearBrush(color);
+    Gdiplus::SolidBrush holeBrush(holeColor);
+    graphics.FillPath(&gearBrush, &gearPath);
+    graphics.FillEllipse(&holeBrush, cx - radius * 0.25f, cy - radius * 0.25f, radius * 0.50f, radius * 0.50f);
+}
+
+static bool DrawScreenControlIcon(HDC hdc, const ButtonConfig& button, RECT rc) {
+    const Action& action = button.action;
+    const ScreenPreset* preset = FindScreenPresetForButton(button);
     if (!preset) return false;
 
     Gdiplus::Graphics graphics(hdc);
@@ -1246,6 +1288,7 @@ static bool DrawScreenControlIcon(HDC hdc, const Action& action, RECT rc) {
     Gdiplus::SolidBrush accentBrush(accent);
 
     const std::wstring target = action.target;
+    const bool brightnessSettings = target == L"ms-settings:display" && _wcsicmp(button.text.c_str(), L"DIS") != 0;
     if (target == L"BRIGHTNESS_UP" || target == L"BRIGHTNESS_DOWN") {
         Gdiplus::RectF monitor(cx - side * 0.36f, cy - side * 0.28f, side * 0.72f, side * 0.48f);
         Gdiplus::GraphicsPath monitorPath;
@@ -1264,7 +1307,7 @@ static bool DrawScreenControlIcon(HDC hdc, const Action& action, RECT rc) {
         }
         const Gdiplus::REAL arrowY = monitor.Y + monitor.Height + side * 0.18f;
         const Gdiplus::REAL arrowHalf = side * 0.12f;
-        const Gdiplus::REAL dir = target == L"BRIGHTNESS_UP" ? -1.0f : 1.0f;
+        const Gdiplus::REAL dir = target == L"BRIGHTNESS_UP" ? 1.0f : -1.0f;
         graphics.DrawLine(&whitePen, cx, arrowY + dir * arrowHalf, cx, arrowY - dir * arrowHalf);
         graphics.DrawLine(&whitePen, cx, arrowY - dir * arrowHalf, cx - arrowHalf * 0.75f, arrowY - dir * arrowHalf + dir * arrowHalf * 0.75f);
         graphics.DrawLine(&whitePen, cx, arrowY - dir * arrowHalf, cx + arrowHalf * 0.75f, arrowY - dir * arrowHalf + dir * arrowHalf * 0.75f);
@@ -1279,6 +1322,21 @@ static bool DrawScreenControlIcon(HDC hdc, const Action& action, RECT rc) {
         return true;
     }
 
+    if (target == L"ms-settings:display-advancedgraphics") {
+        Gdiplus::RectF chip(cx - side * 0.30f, cy - side * 0.27f, side * 0.60f, side * 0.54f);
+        Gdiplus::GraphicsPath chipPath;
+        AddRoundedRectPath(chipPath, chip, static_cast<Gdiplus::REAL>(ScaleValue(5)));
+        graphics.DrawPath(&whitePen, &chipPath);
+        graphics.DrawLine(&accentPen, chip.X + chip.Width * 0.25f, chip.Y + chip.Height * 0.35f, chip.X + chip.Width * 0.75f, chip.Y + chip.Height * 0.35f);
+        graphics.DrawLine(&accentPen, chip.X + chip.Width * 0.25f, chip.Y + chip.Height * 0.55f, chip.X + chip.Width * 0.62f, chip.Y + chip.Height * 0.55f);
+        for (int i = 0; i < 4; ++i) {
+            const Gdiplus::REAL y = chip.Y + chip.Height * (0.18f + i * 0.20f);
+            graphics.DrawLine(&whitePen, chip.X - side * 0.08f, y, chip.X, y);
+            graphics.DrawLine(&whitePen, chip.X + chip.Width, y, chip.X + chip.Width + side * 0.08f, y);
+        }
+        return true;
+    }
+
     if (target == L"ms-settings:themes" || target == L"ms-settings:colors") {
         Gdiplus::RectF palette(cx - side * 0.35f, cy - side * 0.25f, side * 0.70f, side * 0.50f);
         graphics.DrawEllipse(&whitePen, palette);
@@ -1289,7 +1347,17 @@ static bool DrawScreenControlIcon(HDC hdc, const Action& action, RECT rc) {
         return true;
     }
 
-    if (target == L"ms-settings:personalization-background" || target == L"ms-settings:lockscreen") {
+    if (target == L"ms-settings:lockscreen") {
+        Gdiplus::RectF lockBody(cx - side * 0.25f, cy - side * 0.02f, side * 0.50f, side * 0.34f);
+        Gdiplus::GraphicsPath lockPath;
+        AddRoundedRectPath(lockPath, lockBody, static_cast<Gdiplus::REAL>(ScaleValue(5)));
+        graphics.DrawArc(&whitePen, cx - side * 0.20f, cy - side * 0.30f, side * 0.40f, side * 0.42f, 200.0f, 140.0f);
+        graphics.DrawPath(&whitePen, &lockPath);
+        graphics.FillEllipse(&accentBrush, cx - side * 0.05f, cy + side * 0.10f, side * 0.10f, side * 0.10f);
+        return true;
+    }
+
+    if (target == L"ms-settings:personalization-background") {
         Gdiplus::RectF frame(cx - side * 0.36f, cy - side * 0.28f, side * 0.72f, side * 0.56f);
         Gdiplus::GraphicsPath framePath;
         AddRoundedRectPath(framePath, frame, static_cast<Gdiplus::REAL>(ScaleValue(5)));
@@ -1312,7 +1380,9 @@ static bool DrawScreenControlIcon(HDC hdc, const Action& action, RECT rc) {
     graphics.DrawPath(&whitePen, &monitorPath);
     graphics.DrawLine(&whitePen, cx, monitor.Y + monitor.Height, cx, monitor.Y + monitor.Height + side * 0.14f);
     graphics.DrawLine(&whitePen, cx - side * 0.18f, monitor.Y + monitor.Height + side * 0.16f, cx + side * 0.18f, monitor.Y + monitor.Height + side * 0.16f);
-    if (std::wstring(preset->title) == L"輝度調整") {
+    if (!brightnessSettings) {
+        DrawMiniGear(graphics, monitor.X + monitor.Width * 0.68f, monitor.Y + monitor.Height * 0.48f, side * 0.16f, accent, Gdiplus::Color(22, 25, 30));
+    } else {
         const Gdiplus::REAL sunCx = monitor.X + monitor.Width * 0.72f;
         const Gdiplus::REAL sunCy = monitor.Y + monitor.Height * 0.38f;
         graphics.FillEllipse(&accentBrush, sunCx - side * 0.07f, sunCy - side * 0.07f, side * 0.14f, side * 0.14f);
@@ -1410,7 +1480,7 @@ static void Paint(HDC hdc) {
         }
 
         if (!drew) {
-            drew = DrawScreenControlIcon(hdc, b.action, r);
+            drew = DrawScreenControlIcon(hdc, b, r);
         }
         if (!drew && b.action.type == ActionType::Keys) {
             drew = DrawSystemKeyIcon(hdc, b.action, r);
